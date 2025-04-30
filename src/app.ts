@@ -9,6 +9,7 @@ import passport from "passport";
 import session from "express-session";
 import MongoStore from "connect-mongo";
 import "./config/passport";
+import { connectToDatabase } from "./config/db";
 
 // routes
 import authRoute from "./routes/auth";
@@ -19,47 +20,88 @@ import { handleWebHook } from "./controllers/payment.controller";
 
 const app = express();
 
-mongoose.connect(process.env.MONGODB_URI!)
-  .then(() => console.log("Connected to MongoDB"))
-  .catch((err) => console.log(err));
+// Initialize the app and start the server only after DB connection
+const startServer = async () => {
+  try {
+    // First connect to the database
+    await connectToDatabase();
+    
+    // Set up middleware
+    app.use(cors({
+      origin: process.env.CLIENT_URL,
+      credentials: true,
+    }));
+    
+    app.use(helmet());
+    app.use(morgan("dev"));
+    
+    // Raw body parser for Stripe webhook
+    app.post(
+      "/payments/webhook",
+      express.raw({ type: "application/json" }),
+      handleWebHook
+    );
+    
+    app.use(express.json());
+    
+    // Session configuration with simplified options
+    app.use(session({
+      secret: process.env.SESSION_SECRET!,
+      resave: false,
+      saveUninitialized: false,
+      store: MongoStore.create({ 
+        mongoUrl: process.env.MONGODB_URI!,
+        // Minimal options for MongoStore
+        mongoOptions: {
+          serverSelectionTimeoutMS: 30000,
+          socketTimeoutMS: 45000
+        }
+      }),
+      cookie: {
+        secure: process.env.NODE_ENV === "production",
+        sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
+        maxAge: 24 * 60 * 60 * 1000, // 24 hours
+      },
+    }));
+    
+    app.use(passport.initialize());
+    app.use(passport.session());
+    
+    // Add a health check endpoint
+    app.get("/health", (req, res) => {
+      res.status(200).json({
+        status: "ok",
+        mongodb: mongoose.connection.readyState === 1 ? "connected" : "disconnected"
+      });
+    });
+    
+    // Mount routes
+    app.use("/auth", authRoute);
+    app.use("/contracts", contractsRoute);
+    app.use("/payments", paymentsRoute);
+    app.use("/api/users", userRoutes);
+    
+    // Use the PORT from environment variables
+    const PORT = process.env.PORT || 8080;
+    app.listen(PORT, () => {
+      console.log(`Server is running on port ${PORT}`);
+    });
+  } catch (error) {
+    console.error("Failed to initialize application:", error);
+    process.exit(1);
+  }
+};
 
-app.use(cors({
-  origin: process.env.CLIENT_URL,
-  credentials: true,
-}));
+// Start the application
+startServer();
 
-app.use(helmet());
-app.use(morgan("dev"));
+// Handle unexpected errors
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught Exception:', error);
+  process.exit(1);
+});
 
-app.post(
-  "/payments/webhook",
-  express.raw({ type: "application/json" }),
-  handleWebHook
-);
-app.use(express.json());
-
-app.use(session({
-  secret: process.env.SESSION_SECRET!,
-  resave: false,
-  saveUninitialized: false,
-  store: MongoStore.create({ mongoUrl: process.env.MONGODB_URI! }),
-  cookie: {
-    secure: process.env.NODE_ENV === "production",
-    sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
-    maxAge: 24 * 60 * 60 * 1000, // 24 hours
-  },
-}));
-
-app.use(passport.initialize());
-app.use(passport.session());
-
-// Mount routes with consistent /api prefix pattern
-app.use("/auth", authRoute);
-app.use("/contracts", contractsRoute);
-app.use("/payments", paymentsRoute);
-app.use("/api/users", userRoutes);
-
-const PORT = 8080;
-app.listen(PORT, () => {
-  console.log(`server is running on port ${PORT}`);
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+  process.exit(1);
 });
