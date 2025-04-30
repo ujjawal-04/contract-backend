@@ -4,7 +4,8 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "dev": "nodemon --watch 'src/**/*' --exec ts-node src/app.ts"
+    "dev": "nodemon --watch 'src/**/*' --exec ts-node src/app.ts",
+    "start": "node index.js"
   },
   "keywords": [],
   "author": "",
@@ -43,8 +44,5 @@
     "nodemon": "^3.1.9",
     "ts-node": "^10.9.2",
     "typescript": "^5.8.3"
-  },
-  "scripts": {
-  "start": "node index.js"
-}
+  }
 }
