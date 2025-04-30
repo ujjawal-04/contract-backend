@@ -1,5 +1,6 @@
-import dotenv from "dotenv"
+import dotenv from "dotenv";
 dotenv.config();
+
 import express from "express";
 import helmet from "helmet";
 import cors from "cors";
@@ -8,9 +9,9 @@ import mongoose from "mongoose";
 import passport from "passport";
 import session from "express-session";
 import MongoStore from "connect-mongo";
-import "./config/passport";
+import "./config/passport"; // your passport config
 
-// routes
+// Routes
 import authRoute from "./routes/auth";
 import contractsRoute from "./routes/contracts";
 import paymentsRoute from "./routes/payments";
@@ -19,36 +20,44 @@ import { handleWebHook } from "./controllers/payment.controller";
 
 const app = express();
 
+// Connect to MongoDB
 mongoose.connect(process.env.MONGODB_URI!)
-  .then(() => console.log("Connected to MongoDB"))
-  .catch((err) => console.log(err));
+  .then(() => console.log("✅ Connected to MongoDB"))
+  .catch((err) => console.error("❌ MongoDB Error:", err));
 
-  const allowedOrigins = [
-    "http://localhost:3000", // for local dev
-    "https://contract-analysis-app.vercel.app", // ✅ your Vercel frontend domain
-  ];
-  
-  app.use(cors({
-    origin: (origin, callback) => {
-      if (!origin || allowedOrigins.includes(origin)) {
-        callback(null, true);
-      } else {
-        callback(new Error("Not allowed by CORS"));
-      }
-    },
-    credentials: true, // ✅ very important for cookies
-  }));
+// --- CORS SETUP ---
+const allowedOrigins = [
+  "http://localhost:3000",
+  "https://contract-analysis-app.vercel.app",
+];
 
+app.use(cors({
+  origin: (origin, callback) => {
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error("Not allowed by CORS"));
+    }
+  },
+  credentials: true,
+}));
+
+// --- SECURITY + LOGGING ---
 app.use(helmet());
 app.use(morgan("dev"));
 
+// --- STRIPE WEBHOOK FIRST (must use raw body) ---
 app.post(
   "/payments/webhook",
   express.raw({ type: "application/json" }),
   handleWebHook
 );
-app.use(express.json());
 
+// --- BODY PARSING ---
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// --- SESSION + AUTH ---
 app.use(session({
   secret: process.env.SESSION_SECRET!,
   resave: false,
@@ -64,13 +73,15 @@ app.use(session({
 app.use(passport.initialize());
 app.use(passport.session());
 
-// Mount routes with consistent /api prefix pattern
+// --- ROUTES ---
 app.use("/auth", authRoute);
 app.use("/contracts", contractsRoute);
 app.use("/payments", paymentsRoute);
 app.use("/api/users", userRoutes);
 
-const PORT = 8080;
+// --- START SERVER ---
+const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
-  console.log(`server is running on port ${PORT}`);
+  console.log(`🚀 Server running on port ${PORT}`);
 });
+
