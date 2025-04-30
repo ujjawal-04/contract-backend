@@ -25,16 +25,12 @@ mongoose.connect(process.env.MONGODB_URI!)
   .then(() => console.log("✅ Connected to MongoDB"))
   .catch((err) => console.error("❌ MongoDB Error:", err));
 
-// --- CORS SETUP ---
-const allowedOrigins = [
-  "http://localhost:3000",
-  "https://contract-analysis-app.vercel.app",
-];
-
-app.use(cors({
-  origin: allowedOrigins,
-  credentials: true,
-}));
+  app.use(
+    cors({
+      origin: "https://contract-analysis-app.vercel.app",
+      credentials: true, 
+    })
+  );
 
 // --- SECURITY + LOGGING ---
 app.use(helmet());
@@ -51,18 +47,19 @@ app.post(
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// --- SESSION + AUTH ---
-app.use(session({
-  secret: process.env.SESSION_SECRET!,
-  resave: false,
-  saveUninitialized: false,
-  store: MongoStore.create({ mongoUrl: process.env.MONGODB_URI! }),
-  cookie: {
-    secure: true,                  
-    sameSite: "none",               
-    maxAge: 24 * 60 * 60 * 1000     
-  },
-}));
+app.use(
+  session({
+    secret: process.env.SESSION_SECRET!,
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production", 
+      sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
+      maxAge: 24 * 60 * 60 * 1000,
+    },
+  })
+);
 
 
 app.use(passport.initialize());

@@ -10,15 +10,16 @@ router.get(
 
 
 router.get(
-  "/google/callback",
-  passport.authenticate("google", { failureRedirect: "/login" }),
-  (req, res) => {
-    // ✅ Ensure session is saved before redirecting
-    req.session.save(() => {
-      res.redirect(`${process.env.CLIENT_URL}/dashboard`);
-    });
-  }
-);
+    "/google/callback",
+    passport.authenticate("google", { failureRedirect: "/login" }),
+    (req, res) => {
+      // Save session before redirecting to the frontend dashboard
+      req.session.save(() => {
+        res.redirect(`${process.env.CLIENT_URL}/dashboard`);
+      });
+    }
+  );
+  
 
 
 router.get("/current-user", (req, res) => {
