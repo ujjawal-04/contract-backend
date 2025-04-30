@@ -27,7 +27,7 @@ mongoose.connect(process.env.MONGODB_URI!)
 
   app.use(
     cors({
-      origin: "https://contract-analysis-app.vercel.app",
+      origin: "https://contract-analysis-app.vercel.app", // Replace with your frontend URL
       credentials: true, 
     })
   );
