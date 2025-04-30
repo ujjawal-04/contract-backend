@@ -71,7 +71,7 @@ export const handleWebHook = async (req: Request, res: Response) => {
         );              
         
         if (user && user.email) {
-          // Send confirmation email using EmailJS
+          // Use displayName directly - it's guaranteed to exist based on your model
           await sendPremiumConfirmationEmail(user.email, user.displayName);
           console.log(`Premium confirmation email sent to ${user.email}`);
         } else {
