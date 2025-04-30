@@ -23,10 +23,21 @@ mongoose.connect(process.env.MONGODB_URI!)
   .then(() => console.log("Connected to MongoDB"))
   .catch((err) => console.log(err));
 
-app.use(cors({
-  origin: process.env.CLIENT_URL,
-  credentials: true,
-}));
+  const allowedOrigins = [
+    "http://localhost:3000", // for local dev
+    "https://contract-analysis-app.vercel.app", // ✅ your Vercel frontend domain
+  ];
+  
+  app.use(cors({
+    origin: (origin, callback) => {
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        callback(new Error("Not allowed by CORS"));
+      }
+    },
+    credentials: true, // ✅ very important for cookies
+  }));
 
 app.use(helmet());
 app.use(morgan("dev"));
