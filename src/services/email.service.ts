@@ -1,14 +1,24 @@
-import { Resend } from "resend";
-const RESEND_API_KEY = process.env.RESEND_API_KEY;
-export const resend = new Resend(RESEND_API_KEY);
+// email.service.ts
+import nodemailer from "nodemailer";
+
+// Create a transporter using environment variables
+const transporter = nodemailer.createTransport({
+  host: process.env.EMAIL_HOST,
+  port: Number(process.env.EMAIL_PORT) || 587,
+  secure: process.env.EMAIL_SECURE === "true",
+  auth: {
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASSWORD,
+  },
+});
 
 export const sendPremiumConfirmationEmail = async (
   userEmail: string,
   userName: string
 ) => {
   try {
-    await resend.emails.send({
-      from: 'team@charandhul.com',
+    const info = await transporter.sendMail({
+      from: '"Contract Analysis Team" <team@charandhul.com>',
       to: userEmail,
       subject: 'Welcome to Premium Contract Analysis',
       html: `
@@ -56,7 +66,7 @@ export const sendPremiumConfirmationEmail = async (
                 </p>
 
                 <div style="text-align: center; margin: 35px 0;">
-                  <a href="http://localhost:3000/dashboard" style="background-color: #1a56db; color: #ffffff; font-weight: bold; padding: 14px 28px; text-decoration: none; border-radius: 6px; font-size: 16px;">
+                  <a href="${process.env.CLIENT_URL}/dashboard" style="background-color: #1a56db; color: #ffffff; font-weight: bold; padding: 14px 28px; text-decoration: none; border-radius: 6px; font-size: 16px;">
                     Go to Dashboard
                   </a>
                 </div>
@@ -83,7 +93,23 @@ export const sendPremiumConfirmationEmail = async (
         </html>
       `,
     });
+
+    console.log("Email sent successfully:", info.messageId);
+    return info;
   } catch (error) {
-    console.error(error);
+    console.error("Error sending email:", error);
+    throw error;
+  }
+};
+
+// Verify the email configuration on startup
+export const verifyEmailConnection = async () => {
+  try {
+    await transporter.verify();
+    console.log("Email server connection verified");
+    return true;
+  } catch (error) {
+    console.error("Email server connection failed:", error);
+    return false;
   }
 };

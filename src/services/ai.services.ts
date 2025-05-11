@@ -3,7 +3,7 @@ import { getDocument } from "pdfjs-dist";
 import { GoogleGenerativeAI, GenerativeModel } from "@google/generative-ai";
 
 // Updated model name to the latest version
-const AI_MODEL = "gemini-1.5-pro";
+const AI_MODEL = "gemini-2.0-flash";
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
 
 // Define the type for the AI model

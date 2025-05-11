@@ -11,6 +11,9 @@ import ContractAnalysisSchema, { IContractAnalysis } from "../models/contract.mo
 import mongoose, { FilterQuery } from "mongoose";
 import { isvalidMongoId } from "../utils/mongoUtils";
 
+// Define free plan contract limit constant
+const FREE_PLAN_CONTRACT_LIMIT = 2;
+
 // Update storage to handle larger files if needed
 const upload = multer({
     storage: multer.memoryStorage(),
@@ -28,6 +31,31 @@ const upload = multer({
 
 export const uploadMiddleware = upload;
 
+// New endpoint to get user's contract usage statistics
+export const getUserContractStats = async (req: Request, res: Response) => {
+    const user = req.user as IUser;
+    
+    try {
+        // Count the user's existing contracts
+        const contractCount = await ContractAnalysisSchema.countDocuments({
+            userId: user._id
+        });
+        
+        // Return statistics with appropriate limits based on user's plan
+        return res.status(200).json({
+            contractCount,
+            contractLimit: user.isPremium ? Infinity : FREE_PLAN_CONTRACT_LIMIT,
+            isPremium: user.isPremium || false
+        });
+    } catch (error) {
+        console.error("Error getting user contract stats:", error);
+        return res.status(500).json({ 
+            error: "Failed to get contract statistics",
+            message: error instanceof Error ? error.message : "Unknown error"
+        });
+    }
+};
+
 export const detectAndConfirmContractType = async (
     req: Request,
     res: Response
@@ -39,6 +67,21 @@ export const detectAndConfirmContractType = async (
     }
 
     try {
+        // For free users, check if they've reached their contract limit before proceeding
+        if (!user.isPremium) {
+            const contractCount = await ContractAnalysisSchema.countDocuments({
+                userId: user._id
+            });
+            
+            if (contractCount >= FREE_PLAN_CONTRACT_LIMIT) {
+                return res.status(403).json({ 
+                    error: "Free plan limit reached", 
+                    message: `You've reached the limit of ${FREE_PLAN_CONTRACT_LIMIT} contracts on the free plan. Please upgrade to continue.`,
+                    limitReached: true
+                });
+            }
+        }
+
         const fileKey = `file:${user._id}:${Date.now()}`;
         await redis.set(fileKey, req.file.buffer);
         
@@ -72,6 +115,21 @@ export const analyzeContract = async (
 ) => {
     const user = req.user as IUser;
     let { contractType, tempKey } = req.body;
+    
+    // For free users, check if they've reached their contract limit before proceeding
+    if (!user.isPremium) {
+        const contractCount = await ContractAnalysisSchema.countDocuments({
+            userId: user._id
+        });
+        
+        if (contractCount >= FREE_PLAN_CONTRACT_LIMIT) {
+            return res.status(403).json({ 
+                error: "Free plan limit reached", 
+                message: `You've reached the limit of ${FREE_PLAN_CONTRACT_LIMIT} contracts on the free plan. Please upgrade to continue.`,
+                limitReached: true
+            });
+        }
+    }
     
     let fileKey: string | null = null;
     let fileBuffer: Buffer | null = null;
@@ -170,6 +228,22 @@ export const analyzeContract = async (
         // Clean up Redis keys
         if (tempKey) await redis.del(tempKey);
         if (fileKey) await redis.del(fileKey);
+
+        // Include contract usage stats in the response for free users
+        if (!user.isPremium) {
+            const contractCount = await ContractAnalysisSchema.countDocuments({
+                userId: user._id
+            });
+            
+            return res.json({
+                ...savedAnalysis.toObject(),
+                usageStats: {
+                    contractCount,
+                    contractLimit: FREE_PLAN_CONTRACT_LIMIT,
+                    remainingContracts: Math.max(0, FREE_PLAN_CONTRACT_LIMIT - contractCount)
+                }
+            });
+        }
 
         res.json(savedAnalysis);
     } catch (error: any) {
