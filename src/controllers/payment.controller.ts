@@ -6,7 +6,7 @@ import { sendPremiumConfirmationEmail } from "../services/email.service";
 
 // Use the exact API version that TypeScript expects
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY as string, {
-  apiVersion: "2025-03-31.basil"
+  apiVersion: "2025-07-30.basil"
 });
 
 export const createCheckoutSession = async (req: Request, res: Response) => {
