@@ -46,24 +46,27 @@ passport.use(
             email: profile.emails![0].value,
             displayName: profile.displayName,
             profilePicture: profile.photos![0].value,
+            plan: "basic" // Ensure new users start with basic plan
           });
         } else {
-          console.log('Found existing user:', user._id);
+          console.log('Found existing user:', user._id, 'with plan:', user.plan);
         }
         
         // Convert Mongoose document to plain object
         const userDoc = user as any;
         
         // Create a user object to be used in Express session
+        // IMPORTANT: Include the plan field here
         const userForAuth: Express.User = {
           _id: safeIdToString(userDoc._id),
           email: userDoc.email,
           displayName: userDoc.displayName,
-          isPremium: userDoc.isPremium,
+          isPremium: userDoc.plan === "premium" || userDoc.plan === "gold", // Set based on plan
+          plan: userDoc.plan || "basic", // Ensure plan is included
           profilePicture: userDoc.profilePicture,
         };
         
-        console.log('Authentication successful, user ID:', userForAuth._id);
+        console.log('Authentication successful, user ID:', userForAuth._id, 'plan:', userForAuth.plan);
         done(null, userForAuth); // Return user info
       } catch (error) {
         console.error('Google authentication error:', error);
@@ -75,7 +78,7 @@ passport.use(
 
 // Serialize User
 passport.serializeUser((user: Express.User, done) => {
-  console.log('Serializing user:', user._id);
+  console.log('Serializing user:', user._id, 'with plan:', user.plan);
   done(null, user._id); // Store only user _id in session
 });
 
@@ -93,14 +96,17 @@ passport.deserializeUser(async (id: string, done) => {
     const userDoc = user as any; // Cast to 'any' to avoid TypeScript errors
     
     // Create a user object for session (to match Express.User)
+    // IMPORTANT: Always include the latest plan information from database
     const userForAuth: Express.User = {
       _id: safeIdToString(userDoc._id),
       email: userDoc.email,
       displayName: userDoc.displayName,
-      isPremium: userDoc.isPremium,
+      isPremium: userDoc.plan === "premium" || userDoc.plan === "gold", // Updated logic
+      plan: userDoc.plan || "basic", // Include plan field
       profilePicture: userDoc.profilePicture,
     };
     
+    console.log('Deserialized user:', userForAuth._id, 'with plan:', userForAuth.plan);
     done(null, userForAuth); // Return user info
   } catch (error) {
     console.error('Deserialization error:', error);
