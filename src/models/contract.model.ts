@@ -53,6 +53,18 @@ export interface IContractAnalysis extends Document {
         details: string[];
     };
     specificClauses?: string;
+    userPlan: "basic" | "premium" | "gold";
+    modificationHistory?: {
+        modifiedAt: Date;
+        modifiedBy: string;
+        changes: string;
+        version: number;
+    }[];
+    chatHistory?: {
+        message: string;
+        response: string;
+        timestamp: Date;
+    }[];
 }
 
 const ContractAnalysisSchema = new Schema({
@@ -180,7 +192,44 @@ const ContractAnalysisSchema = new Schema({
     },
     specificClauses: {
         type: String
-    }
+    },
+    userPlan: {
+        type: String,
+        enum: ["basic", "premium", "gold"],
+        default: "basic"
+    },
+    modificationHistory: [{
+        modifiedAt: {
+            type: Date,
+            default: Date.now
+        },
+        modifiedBy: {
+            type: String,
+            required: true
+        },
+        changes: {
+            type: String,
+            required: true
+        },
+        version: {
+            type: Number,
+            required: true
+        }
+    }],
+    chatHistory: [{
+        message: {
+            type: String,
+            required: true
+        },
+        response: {
+            type: String,
+            required: true
+        },
+        timestamp: {
+            type: Date,
+            default: Date.now
+        }
+    }]
 });
 
 export default mongoose.model<IContractAnalysis>(

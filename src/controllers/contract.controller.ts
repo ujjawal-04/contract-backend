@@ -31,6 +31,23 @@ const upload = multer({
 
 export const uploadMiddleware = upload;
 
+// Helper function to determine user plan level
+const getUserPlanLevel = (user: IUser): "basic" | "premium" | "gold" => {
+    if (user.plan === "gold") return "gold";
+    if (user.plan === "premium" || user.isPremium) return "premium";
+    return "basic";
+};
+
+// Helper function to check if user has premium features
+const hasPremiumAccess = (user: IUser): boolean => {
+    return user.isPremium || user.plan === "premium" || user.plan === "gold";
+};
+
+// Helper function to check if user has gold features
+const hasGoldAccess = (user: IUser): boolean => {
+    return user.plan === "gold";
+};
+
 // New endpoint to get user's contract usage statistics
 export const getUserContractStats = async (req: Request, res: Response) => {
     const user = req.user as IUser;
@@ -41,11 +58,14 @@ export const getUserContractStats = async (req: Request, res: Response) => {
             userId: user._id
         });
         
+        const userPlan = getUserPlanLevel(user);
+        
         // Return statistics with appropriate limits based on user's plan
         return res.status(200).json({
             contractCount,
-            contractLimit: user.isPremium ? Infinity : FREE_PLAN_CONTRACT_LIMIT,
-            isPremium: user.isPremium || false
+            contractLimit: hasPremiumAccess(user) ? Infinity : FREE_PLAN_CONTRACT_LIMIT,
+            plan: userPlan,
+            hasGoldAccess: hasGoldAccess(user)
         });
     } catch (error) {
         console.error("Error getting user contract stats:", error);
@@ -67,8 +87,8 @@ export const detectAndConfirmContractType = async (
     }
 
     try {
-        // For free users, check if they've reached their contract limit before proceeding
-        if (!user.isPremium) {
+        // For basic users, check if they've reached their contract limit before proceeding
+        if (!hasPremiumAccess(user)) {
             const contractCount = await ContractAnalysisSchema.countDocuments({
                 userId: user._id
             });
@@ -116,8 +136,8 @@ export const analyzeContract = async (
     const user = req.user as IUser;
     let { contractType, tempKey } = req.body;
     
-    // For free users, check if they've reached their contract limit before proceeding
-    if (!user.isPremium) {
+    // For basic users, check if they've reached their contract limit before proceeding
+    if (!hasPremiumAccess(user)) {
         const contractCount = await ContractAnalysisSchema.countDocuments({
             userId: user._id
         });
@@ -178,12 +198,10 @@ export const analyzeContract = async (
         const pdfText = await extractTextFromPDF(fileKey);
         
         let analysis: any;
+        const userPlan = getUserPlanLevel(user);
 
-        if(user.isPremium) {
-            analysis = await analyzeContractWithAI(pdfText, "premium" ,contractType);
-        } else {
-            analysis = await analyzeContractWithAI(pdfText, "free" ,contractType);
-        }
+        // Pass the user's plan to the AI analysis
+        analysis = await analyzeContractWithAI(pdfText, userPlan, contractType);
         
         try {
             analysis = JSON.parse(analysis);
@@ -219,6 +237,7 @@ export const analyzeContract = async (
             intellectualPropertyClauses: analysis.intellectualPropertyClauses || [],
             language: "en",
             aimodel: "gemini-1.5-pro",
+            userPlan: userPlan, // Store the plan used for analysis
         });
         
         // Save the document
@@ -229,8 +248,8 @@ export const analyzeContract = async (
         if (tempKey) await redis.del(tempKey);
         if (fileKey) await redis.del(fileKey);
 
-        // Include contract usage stats in the response for free users
-        if (!user.isPremium) {
+        // Include contract usage stats in the response for basic users
+        if (!hasPremiumAccess(user)) {
             const contractCount = await ContractAnalysisSchema.countDocuments({
                 userId: user._id
             });
@@ -245,7 +264,10 @@ export const analyzeContract = async (
             });
         }
 
-        res.json(savedAnalysis);
+        res.json({
+            ...savedAnalysis.toObject(),
+            planUsed: userPlan
+        });
     } catch (error: any) {
         console.error("analyzeContract error:", error);
         
@@ -275,7 +297,14 @@ export const getUserContracts = async (req: Request, res: Response) => {
         const contracts = await ContractAnalysisSchema.find(query as FilterQuery<IContractAnalysis>
         ).sort({ createdAt: -1});
 
-        res.json(contracts);
+        // Add user plan information to response
+        const userPlan = getUserPlanLevel(user);
+        
+        res.json({
+            contracts,
+            userPlan,
+            hasGoldAccess: hasGoldAccess(user)
+        });
     } catch (error) {
         console.error(error);
         return res.status(500).json({ error: "Failed to get contracts" });
@@ -303,7 +332,11 @@ export const getContractByID = async (req: Request, res: Response) => {
                 ? JSON.parse(cachedContract) 
                 : cachedContract;
                 
-            return res.json(parsedContract);
+            return res.json({
+                ...parsedContract,
+                userPlan: getUserPlanLevel(user),
+                hasGoldAccess: hasGoldAccess(user)
+            });
         }
 
         // Not found in cache, get from database
@@ -329,8 +362,12 @@ export const getContractByID = async (req: Request, res: Response) => {
             // Continue even if caching fails
         }
 
-        // Return the contract
-        res.json(contract);
+        // Return the contract with user plan info
+        res.json({
+            ...contractObject,
+            userPlan: getUserPlanLevel(user),
+            hasGoldAccess: hasGoldAccess(user)
+        });
     } catch (error) {
         console.error("Error in getContractByID:", error);
         res.status(500).json({ error: "Failed to get contract" });
@@ -381,5 +418,90 @@ export const deleteContract = async (req: Request, res: Response) => {
             error: "Failed to delete contract",
             message: error instanceof Error ? error.message : "Unknown error"
         });
+    }
+};
+
+// New Gold-specific endpoint: Chat with contract (Gold only)
+export const chatWithContract = async (req: Request, res: Response) => {
+    const user = req.user as IUser;
+    const { contractId, message } = req.body;
+    
+    // Check if user has Gold access
+    if (!hasGoldAccess(user)) {
+        return res.status(403).json({
+            error: "Gold subscription required",
+            message: "This feature is only available for Gold subscribers"
+        });
+    }
+    
+    if (!isvalidMongoId(contractId)) {
+        return res.status(400).json({ error: "Invalid contract ID" });
+    }
+    
+    try {
+        // Get the contract
+        const contract = await ContractAnalysisSchema.findOne({
+            _id: contractId,
+            userId: user._id,
+        });
+        
+        if (!contract) {
+            return res.status(404).json({ error: "Contract not found" });
+        }
+        
+        // Here you would implement the AI chat functionality
+        // This is a placeholder for the actual AI chat implementation
+        const chatResponse = `AI Response to: ${message} (This is a Gold feature)`;
+        
+        res.json({
+            response: chatResponse,
+            contractId: contractId
+        });
+    } catch (error) {
+        console.error("Error in contract chat:", error);
+        res.status(500).json({ error: "Failed to process chat request" });
+    }
+};
+
+// New Gold-specific endpoint: Modify contract (Gold only)
+export const modifyContract = async (req: Request, res: Response) => {
+    const user = req.user as IUser;
+    const { contractId, modifications } = req.body;
+    
+    // Check if user has Gold access
+    if (!hasGoldAccess(user)) {
+        return res.status(403).json({
+            error: "Gold subscription required",
+            message: "Contract modification is only available for Gold subscribers"
+        });
+    }
+    
+    if (!isvalidMongoId(contractId)) {
+        return res.status(400).json({ error: "Invalid contract ID" });
+    }
+    
+    try {
+        // Get the contract
+        const contract = await ContractAnalysisSchema.findOne({
+            _id: contractId,
+            userId: user._id,
+        });
+        
+        if (!contract) {
+            return res.status(404).json({ error: "Contract not found" });
+        }
+        
+        // Here you would implement the AI contract modification functionality
+        // This is a placeholder for the actual AI modification implementation
+        const modifiedContract = `Modified contract content based on: ${JSON.stringify(modifications)}`;
+        
+        res.json({
+            modifiedContract: modifiedContract,
+            originalContractId: contractId,
+            modifications: modifications
+        });
+    } catch (error) {
+        console.error("Error in contract modification:", error);
+        res.status(500).json({ error: "Failed to modify contract" });
     }
 };
