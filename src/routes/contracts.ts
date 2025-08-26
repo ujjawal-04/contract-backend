@@ -9,13 +9,16 @@ import {
     deleteContract,
     getUserContractStats,
     chatWithContract,
-    modifyContract
+    modifyContract,
+    downloadModifiedContract,
+    generateRecommendations,
+    trackChanges
 } from "../controllers/contract.controller";
 import { handleErrors } from "../middleware/errors";
 
 const router = express.Router();
 
-// Existing routes...
+// Basic routes (available to all authenticated users)
 router.get("/user-stats", isAuthenticated, handleErrors(getUserContractStats));
 router.post("/detect-type", isAuthenticated, uploadMiddleware, handleErrors(detectAndConfirmContractType));
 router.post("/analyze", isAuthenticated, uploadMiddleware, handleErrors(analyzeContract));
@@ -26,5 +29,8 @@ router.delete("/:id", isAuthenticated, handleErrors(deleteContract));
 // Gold-specific routes
 router.post("/chat", isAuthenticated, isGoldUser, handleErrors(chatWithContract));
 router.post("/modify", isAuthenticated, isGoldUser, handleErrors(modifyContract));
+router.get("/download/:contractId/version/:version", isAuthenticated, isGoldUser, handleErrors(downloadModifiedContract));
+router.post("/recommendations", isAuthenticated, isGoldUser, handleErrors(generateRecommendations));
+router.get("/track-changes", isAuthenticated, isGoldUser, handleErrors(trackChanges));
 
 export default router;

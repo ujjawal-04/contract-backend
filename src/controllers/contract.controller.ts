@@ -6,10 +6,15 @@ import {
     analyzeContractWithAI,
     detectContractType,
     extractTextFromPDF,
+    modifyContractAI,
+    chatWithContractAI,
+    generateCustomRecommendations,
 } from "../services/ai.services";
 import ContractAnalysisSchema, { IContractAnalysis } from "../models/contract.model";
 import mongoose, { FilterQuery } from "mongoose";
 import { isvalidMongoId } from "../utils/mongoUtils";
+// Removed unused PDFDocument and generateContractPDF imports
+import { generateModifiedContractPDF } from "../services/pdf.service";
 
 // Define free plan contract limit constant
 const FREE_PLAN_CONTRACT_LIMIT = 2;
@@ -20,7 +25,7 @@ const upload = multer({
     limits: {
         fileSize: 10 * 1024 * 1024, // 10MB limit
     },
-    fileFilter: (req, file, cb) => {
+    fileFilter: (_req, file, cb) => { // Fixed: Added underscore to unused req parameter
         if (file.mimetype === "application/pdf") {
             cb(null, true);
         } else {
@@ -79,8 +84,9 @@ export const getUserContractStats = async (req: Request, res: Response) => {
 export const detectAndConfirmContractType = async (
     req: Request,
     res: Response
-) => {
+): Promise<Response> => { // Fixed: Added return type
     const user = req.user as IUser;
+    const { storeDocument } = req.body; // Gold users can choose to store document
 
     if (!req.file) {
         return res.status(400).json({ error: "No file uploaded" });
@@ -108,6 +114,13 @@ export const detectAndConfirmContractType = async (
         // Increase expiration time to handle larger files
         await redis.expire(fileKey, 7200); // 2 hours
         
+        // Store original file for Gold users if requested
+        if (hasGoldAccess(user) && storeDocument) {
+            const originalFileKey = `original:${user._id}:${Date.now()}`;
+            await redis.set(originalFileKey, req.file.buffer);
+            await redis.expire(originalFileKey, 86400); // Store for 24 hours for Gold users
+        }
+        
         const pdfText = await extractTextFromPDF(fileKey);
         const detectedType = await detectContractType(pdfText);
         
@@ -116,13 +129,14 @@ export const detectAndConfirmContractType = async (
         await redis.set(tempKey, fileKey);
         await redis.expire(tempKey, 7200); // 2 hours
         
-        res.json({ 
+        return res.json({ 
             detectedType,
-            tempKey // Send the temp key back to the client
+            tempKey, // Send the temp key back to the client
+            canStore: hasGoldAccess(user) // Inform client if document storage is available
         });
     } catch (error) {
         console.error("Contract type detection error:", error);
-        res.status(500).json({ 
+        return res.status(500).json({ 
             error: "Failed to detect contract type",
             message: error instanceof Error ? error.message : "Unknown error"
         });
@@ -132,9 +146,9 @@ export const detectAndConfirmContractType = async (
 export const analyzeContract = async (
     req: Request,
     res: Response
-) => {
+): Promise<Response> => { // Fixed: Added return type
     const user = req.user as IUser;
-    let { contractType, tempKey } = req.body;
+    let { contractType, tempKey, storeOriginal } = req.body;
     
     // For basic users, check if they've reached their contract limit before proceeding
     if (!hasPremiumAccess(user)) {
@@ -215,6 +229,12 @@ export const analyzeContract = async (
             throw new Error("Invalid analysis result");
         }
 
+        // Store original file buffer for Gold users
+        let originalFileBuffer: Buffer | null = null;
+        if (hasGoldAccess(user) && storeOriginal && fileBuffer) {
+            originalFileBuffer = fileBuffer;
+        }
+
         // Create a new Contract Analysis document
         const contractAnalysis = new ContractAnalysisSchema({
             userId: user._id,
@@ -236,8 +256,10 @@ export const analyzeContract = async (
             specificClauses: analysis.specificClauses || "",
             intellectualPropertyClauses: analysis.intellectualPropertyClauses || [],
             language: "en",
-            aimodel: "gemini-1.5-pro",
+            aimodel: "gemini-2.0-flash",
             userPlan: userPlan, // Store the plan used for analysis
+            originalFile: originalFileBuffer, // Store original file for Gold users
+            hasStoredDocument: hasGoldAccess(user) && storeOriginal,
         });
         
         // Save the document
@@ -264,7 +286,7 @@ export const analyzeContract = async (
             });
         }
 
-        res.json({
+        return res.json({
             ...savedAnalysis.toObject(),
             planUsed: userPlan
         });
@@ -276,14 +298,378 @@ export const analyzeContract = async (
             console.error("Mongoose validation error details:", JSON.stringify(error.errors));
         }
         
-        res.status(500).json({ 
+        return res.status(500).json({ 
             error: "Failed to analyze contract",
             message: error instanceof Error ? error.message : "Unknown error"
         });
     }
 };
 
-export const getUserContracts = async (req: Request, res: Response) => {
+// Enhanced Gold-specific endpoint: Chat with contract
+export const chatWithContract = async (req: Request, res: Response): Promise<Response> => { // Fixed: Added return type
+    const user = req.user as IUser;
+    const { contractId, message } = req.body;
+    
+    // Check if user has Gold access
+    if (!hasGoldAccess(user)) {
+        return res.status(403).json({
+            error: "Gold subscription required",
+            message: "This feature is only available for Gold subscribers"
+        });
+    }
+    
+    if (!isvalidMongoId(contractId)) {
+        return res.status(400).json({ error: "Invalid contract ID" });
+    }
+    
+    try {
+        // Get the contract
+        const contract = await ContractAnalysisSchema.findOne({
+            _id: contractId,
+            userId: user._id,
+        });
+        
+        if (!contract) {
+            return res.status(404).json({ error: "Contract not found" });
+        }
+        
+        // Use the AI chat service
+        const chatResponse = await chatWithContractAI(
+            contract.contractText,
+            message,
+            contract.chatHistory || []
+        );
+        
+        // Save chat history
+        if (!contract.chatHistory) {
+            contract.chatHistory = [];
+        }
+        
+        contract.chatHistory.push({
+            message: message,
+            response: chatResponse,
+            timestamp: new Date()
+        });
+        
+        await contract.save();
+        
+        return res.json({
+            response: chatResponse,
+            contractId: contractId,
+            timestamp: new Date()
+        });
+    } catch (error) {
+        console.error("Error in contract chat:", error);
+        return res.status(500).json({ error: "Failed to process chat request" });
+    }
+};
+
+// Enhanced Gold-specific endpoint: Modify contract with recommendations integration
+export const modifyContract = async (req: Request, res: Response): Promise<Response> => { // Fixed: Added return type
+    const user = req.user as IUser;
+    const { contractId, modifications, useRecommendations, customModifications } = req.body;
+    
+    // Check if user has Gold access
+    if (!hasGoldAccess(user)) {
+        return res.status(403).json({
+            error: "Gold subscription required",
+            message: "Contract modification is only available for Gold subscribers"
+        });
+    }
+    
+    if (!isvalidMongoId(contractId)) {
+        return res.status(400).json({ error: "Invalid contract ID" });
+    }
+    
+    try {
+        // Get the contract
+        const contract = await ContractAnalysisSchema.findOne({
+            _id: contractId,
+            userId: user._id,
+        });
+        
+        if (!contract) {
+            return res.status(404).json({ error: "Contract not found" });
+        }
+        
+        // Prepare modifications based on user selection
+        let finalModifications: string[] = [];
+        
+        // If using AI-generated recommendations
+        if (useRecommendations && contract.recommendations) {
+            finalModifications = [...contract.recommendations];
+        }
+        
+        // Add custom modifications
+        if (customModifications && Array.isArray(customModifications)) {
+            finalModifications = [...finalModifications, ...customModifications];
+        }
+        
+        // If direct modifications provided
+        if (modifications && Array.isArray(modifications)) {
+            finalModifications = [...finalModifications, ...modifications];
+        }
+        
+        if (finalModifications.length === 0) {
+            return res.status(400).json({ 
+                error: "No modifications specified",
+                message: "Please provide modifications or select recommendations to apply"
+            });
+        }
+        
+        // Use AI to modify the contract
+        const modifiedContract = await modifyContractAI(
+            contract.contractText,
+            finalModifications,
+            contract.contractType
+        );
+        
+        // Track modification history
+        if (!contract.modificationHistory) {
+            contract.modificationHistory = [];
+        }
+        
+        const newVersion = (contract.modificationHistory.length || 0) + 2; // Version 1 is original
+        
+        contract.modificationHistory.push({
+            modifiedAt: new Date(),
+            modifiedBy: user.displayName || user.email,
+            changes: finalModifications.join("; "),
+            version: newVersion,
+            modifiedContent: modifiedContract
+        });
+        
+        await contract.save();
+        
+        return res.json({
+            modifiedContract: modifiedContract,
+            originalContractId: contractId,
+            modifications: finalModifications,
+            version: newVersion,
+            canDownload: true
+        });
+    } catch (error) {
+        console.error("Error in contract modification:", error);
+        return res.status(500).json({ error: "Failed to modify contract" });
+    }
+};
+
+// New Gold endpoint: Download modified contract as PDF
+export const downloadModifiedContract = async (req: Request, res: Response): Promise<Response | void> => { // Fixed: Added return type
+    const user = req.user as IUser;
+    const { contractId, version } = req.params;
+    
+    // Check if user has Gold access
+    if (!hasGoldAccess(user)) {
+        return res.status(403).json({
+            error: "Gold subscription required",
+            message: "Downloading modified contracts is only available for Gold subscribers"
+        });
+    }
+    
+    if (!isvalidMongoId(contractId)) {
+        return res.status(400).json({ error: "Invalid contract ID" });
+    }
+    
+    try {
+        // Get the contract with proper typing
+        const contract = await ContractAnalysisSchema.findOne({
+            _id: contractId,
+            userId: user._id,
+        }) as IContractAnalysis | null; // Fixed: Added proper typing
+        
+        if (!contract) {
+            return res.status(404).json({ error: "Contract not found" });
+        }
+        
+        // Get the requested version
+        let contractContent: string;
+        let versionInfo: string;
+        
+        if (version === "original" || version === "1") {
+            contractContent = contract.contractText;
+            versionInfo = "Original";
+        } else {
+            const versionNum = parseInt(version);
+            const modification = contract.modificationHistory?.find(
+                mod => mod.version === versionNum
+            );
+            
+            if (!modification || !modification.modifiedContent) {
+                return res.status(404).json({ error: "Version not found" });
+            }
+            
+            contractContent = modification.modifiedContent;
+            versionInfo = `Version ${versionNum} - Modified on ${modification.modifiedAt}`;
+        }
+        
+        // Generate PDF
+        const pdfBuffer = await generateModifiedContractPDF(
+            contractContent,
+            contract.contractType,
+            versionInfo,
+            {
+                companyName: "Lexalyze Gold",
+                userName: user.displayName || user.email,
+                generatedDate: new Date(),
+                 contractId: String(contract._id) // Fixed: Added toString()
+            }
+        );
+        
+        // Set response headers for PDF download
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename="contract-${contract.contractType}-v${version}.pdf"`);
+        res.send(pdfBuffer);
+        
+    } catch (error) {
+        console.error("Error downloading modified contract:", error);
+        return res.status(500).json({ error: "Failed to download contract" });
+    }
+};
+
+// New Gold endpoint: Generate custom recommendations based on focus areas
+export const generateRecommendations = async (req: Request, res: Response): Promise<Response> => { // Fixed: Added return type
+    const user = req.user as IUser;
+    const { contractId, focusAreas } = req.body;
+    
+    // Check if user has Gold access
+    if (!hasGoldAccess(user)) {
+        return res.status(403).json({
+            error: "Gold subscription required",
+            message: "Custom recommendations are only available for Gold subscribers"
+        });
+    }
+    
+    if (!isvalidMongoId(contractId)) {
+        return res.status(400).json({ error: "Invalid contract ID" });
+    }
+    
+    try {
+        // Get the contract
+        const contract = await ContractAnalysisSchema.findOne({
+            _id: contractId,
+            userId: user._id,
+        });
+        
+        if (!contract) {
+            return res.status(404).json({ error: "Contract not found" });
+        }
+        
+        // Generate custom recommendations
+        const customRecommendations = await generateCustomRecommendations(
+            contract.contractText,
+            contract.contractType,
+            focusAreas || ["risk mitigation", "compliance", "negotiation improvement"]
+        );
+        
+        // Optionally save custom recommendations
+        if (!contract.customRecommendations) {
+            contract.customRecommendations = [];
+        }
+        
+        contract.customRecommendations.push({
+            generatedAt: new Date(),
+            focusAreas: focusAreas,
+            recommendations: customRecommendations
+        });
+        
+        await contract.save();
+        
+        return res.json({
+            recommendations: customRecommendations,
+            focusAreas: focusAreas,
+            contractId: contractId
+        });
+    } catch (error) {
+        console.error("Error generating recommendations:", error);
+        return res.status(500).json({ error: "Failed to generate recommendations" });
+    }
+};
+
+// New Gold endpoint: Track changes comparison
+export const trackChanges = async (req: Request, res: Response): Promise<Response> => { // Fixed: Added return type
+    const user = req.user as IUser;
+    const { contractId, version1, version2 } = req.query;
+    
+    // Check if user has Gold access
+    if (!hasGoldAccess(user)) {
+        return res.status(403).json({
+            error: "Gold subscription required",
+            message: "Track changes is only available for Gold subscribers"
+        });
+    }
+    
+    if (!isvalidMongoId(contractId as string)) {
+        return res.status(400).json({ error: "Invalid contract ID" });
+    }
+    
+    try {
+        // Get the contract
+        const contract = await ContractAnalysisSchema.findOne({
+            _id: contractId,
+            userId: user._id,
+        });
+        
+        if (!contract) {
+            return res.status(404).json({ error: "Contract not found" });
+        }
+        
+        // Get versions to compare
+        let content1: string, content2: string;
+        
+        // Get first version content
+        if (version1 === "original" || version1 === "1") {
+            content1 = contract.contractText;
+        } else {
+            const mod1 = contract.modificationHistory?.find(
+                m => m.version === parseInt(version1 as string)
+            );
+            if (!mod1 || !mod1.modifiedContent) {
+                return res.status(404).json({ error: "Version 1 not found" });
+            }
+            content1 = mod1.modifiedContent;
+        }
+        
+        // Get second version content
+        if (version2 === "original" || version2 === "1") {
+            content2 = contract.contractText;
+        } else {
+            const mod2 = contract.modificationHistory?.find(
+                m => m.version === parseInt(version2 as string)
+            );
+            if (!mod2 || !mod2.modifiedContent) {
+                return res.status(404).json({ error: "Version 2 not found" });
+            }
+            content2 = mod2.modifiedContent;
+        }
+        
+        // Simple change tracking (in production, use a proper diff library)
+        const changes = {
+            version1: version1,
+            version2: version2,
+            additions: [], // Parts added in version2
+            deletions: [], // Parts removed from version1
+            modifications: [] // Parts changed between versions
+        };
+        
+        // You would implement proper diff logic here
+        // For now, returning a simple comparison structure
+        
+        return res.json({
+            contractId: contractId,
+            comparison: changes,
+            version1Content: content1,
+            version2Content: content2
+        });
+        
+    } catch (error) {
+        console.error("Error tracking changes:", error);
+        return res.status(500).json({ error: "Failed to track changes" });
+    }
+};
+
+// Existing endpoints remain the same...
+export const getUserContracts = async (req: Request, res: Response): Promise<Response> => { // Fixed: Added return type
     const user = req.user as IUser;
 
     try {
@@ -300,7 +686,7 @@ export const getUserContracts = async (req: Request, res: Response) => {
         // Add user plan information to response
         const userPlan = getUserPlanLevel(user);
         
-        res.json({
+        return res.json({
             contracts,
             userPlan,
             hasGoldAccess: hasGoldAccess(user)
@@ -311,7 +697,7 @@ export const getUserContracts = async (req: Request, res: Response) => {
     }
 }
 
-export const getContractByID = async (req: Request, res: Response) => {
+export const getContractByID = async (req: Request, res: Response): Promise<Response> => { // Fixed: Added return type
     const { id } = req.params;
     const user = req.user as IUser;
 
@@ -363,19 +749,19 @@ export const getContractByID = async (req: Request, res: Response) => {
         }
 
         // Return the contract with user plan info
-        res.json({
+        return res.json({
             ...contractObject,
             userPlan: getUserPlanLevel(user),
             hasGoldAccess: hasGoldAccess(user)
         });
     } catch (error) {
         console.error("Error in getContractByID:", error);
-        res.status(500).json({ error: "Failed to get contract" });
+        return res.status(500).json({ error: "Failed to get contract" });
     }
 };
 
 // Add delete contract function
-export const deleteContract = async (req: Request, res: Response) => {
+export const deleteContract = async (req: Request, res: Response): Promise<Response> => { // Fixed: Added return type
     const { id } = req.params;
     const user = req.user as IUser;
 
@@ -418,90 +804,5 @@ export const deleteContract = async (req: Request, res: Response) => {
             error: "Failed to delete contract",
             message: error instanceof Error ? error.message : "Unknown error"
         });
-    }
-};
-
-// New Gold-specific endpoint: Chat with contract (Gold only)
-export const chatWithContract = async (req: Request, res: Response) => {
-    const user = req.user as IUser;
-    const { contractId, message } = req.body;
-    
-    // Check if user has Gold access
-    if (!hasGoldAccess(user)) {
-        return res.status(403).json({
-            error: "Gold subscription required",
-            message: "This feature is only available for Gold subscribers"
-        });
-    }
-    
-    if (!isvalidMongoId(contractId)) {
-        return res.status(400).json({ error: "Invalid contract ID" });
-    }
-    
-    try {
-        // Get the contract
-        const contract = await ContractAnalysisSchema.findOne({
-            _id: contractId,
-            userId: user._id,
-        });
-        
-        if (!contract) {
-            return res.status(404).json({ error: "Contract not found" });
-        }
-        
-        // Here you would implement the AI chat functionality
-        // This is a placeholder for the actual AI chat implementation
-        const chatResponse = `AI Response to: ${message} (This is a Gold feature)`;
-        
-        res.json({
-            response: chatResponse,
-            contractId: contractId
-        });
-    } catch (error) {
-        console.error("Error in contract chat:", error);
-        res.status(500).json({ error: "Failed to process chat request" });
-    }
-};
-
-// New Gold-specific endpoint: Modify contract (Gold only)
-export const modifyContract = async (req: Request, res: Response) => {
-    const user = req.user as IUser;
-    const { contractId, modifications } = req.body;
-    
-    // Check if user has Gold access
-    if (!hasGoldAccess(user)) {
-        return res.status(403).json({
-            error: "Gold subscription required",
-            message: "Contract modification is only available for Gold subscribers"
-        });
-    }
-    
-    if (!isvalidMongoId(contractId)) {
-        return res.status(400).json({ error: "Invalid contract ID" });
-    }
-    
-    try {
-        // Get the contract
-        const contract = await ContractAnalysisSchema.findOne({
-            _id: contractId,
-            userId: user._id,
-        });
-        
-        if (!contract) {
-            return res.status(404).json({ error: "Contract not found" });
-        }
-        
-        // Here you would implement the AI contract modification functionality
-        // This is a placeholder for the actual AI modification implementation
-        const modifiedContract = `Modified contract content based on: ${JSON.stringify(modifications)}`;
-        
-        res.json({
-            modifiedContract: modifiedContract,
-            originalContractId: contractId,
-            modifications: modifications
-        });
-    } catch (error) {
-        console.error("Error in contract modification:", error);
-        res.status(500).json({ error: "Failed to modify contract" });
     }
 };

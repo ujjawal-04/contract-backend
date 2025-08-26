@@ -5,7 +5,7 @@ import { sendPremiumConfirmationEmail } from "../services/email.service";
 
 // Stripe init
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY as string, {
-  apiVersion: "2025-07-30.basil"
+  apiVersion: "2025-03-31.basil"
 });
 
 // Plan configurations
@@ -26,7 +26,7 @@ export const createCheckoutSession = async (req: Request, res: Response) => {
   
   // Validate plan
   if (!plan || !["premium", "gold"].includes(plan as string)) {
-    return res.status(400).json({ error: "Invalid plan selected" });
+   res.status(400).json({ error: "Invalid plan selected" });
   }
   
   const planType = plan as keyof typeof PLANS;
@@ -134,10 +134,10 @@ export const getPremiumStatus = async (req: Request, res: Response) => {
     const dbUser = await User.findById(user._id);
     
     if (!dbUser) {
-      return res.status(404).json({ error: "User not found" });
+     res.status(404).json({ error: "User not found" });
     }
 
-    const userPlan = dbUser.plan || "basic";
+    const userPlan = dbUser?.plan || "basic";
     
     console.log(`Getting membership status for user ${user._id}: ${userPlan}`);
     
