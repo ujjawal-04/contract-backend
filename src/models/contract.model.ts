@@ -1,7 +1,3 @@
-// ============================================
-// COMPLETE FILE: src/models/contract.model.ts
-// ============================================
-
 import mongoose, { Document, Schema } from "mongoose";
 import { IUser } from "./user.model";
 
