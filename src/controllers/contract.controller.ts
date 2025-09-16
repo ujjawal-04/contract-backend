@@ -16,8 +16,10 @@ import { isvalidMongoId } from "../utils/mongoUtils";
 // Removed unused PDFDocument and generateContractPDF imports
 import { generateModifiedContractPDF } from "../services/pdf.service";
 
-// Define free plan contract limit constant
+// Define contract limits for each plan
 const FREE_PLAN_CONTRACT_LIMIT = 2;
+const PREMIUM_PLAN_CONTRACT_LIMIT = 20;
+const GOLD_PLAN_CONTRACT_LIMIT = 50;
 
 // Update storage to handle larger files if needed
 const upload = multer({
@@ -53,6 +55,20 @@ const hasGoldAccess = (user: IUser): boolean => {
     return user.plan === "gold";
 };
 
+// Helper function to get contract limit based on user plan
+const getContractLimit = (user: IUser): number => {
+    const planLevel = getUserPlanLevel(user);
+    switch (planLevel) {
+        case "gold":
+            return GOLD_PLAN_CONTRACT_LIMIT;
+        case "premium":
+            return PREMIUM_PLAN_CONTRACT_LIMIT;
+        case "basic":
+        default:
+            return FREE_PLAN_CONTRACT_LIMIT;
+    }
+};
+
 // New endpoint to get user's contract usage statistics
 export const getUserContractStats = async (req: Request, res: Response) => {
     const user = req.user as IUser;
@@ -64,11 +80,13 @@ export const getUserContractStats = async (req: Request, res: Response) => {
         });
         
         const userPlan = getUserPlanLevel(user);
+        const contractLimit = getContractLimit(user);
         
         // Return statistics with appropriate limits based on user's plan
         return res.status(200).json({
             contractCount,
-            contractLimit: hasPremiumAccess(user) ? Infinity : FREE_PLAN_CONTRACT_LIMIT,
+            contractLimit,
+            remainingContracts: Math.max(0, contractLimit - contractCount),
             plan: userPlan,
             hasGoldAccess: hasGoldAccess(user)
         });
@@ -93,19 +111,23 @@ export const detectAndConfirmContractType = async (
     }
 
     try {
-        // For basic users, check if they've reached their contract limit before proceeding
-        if (!hasPremiumAccess(user)) {
-            const contractCount = await ContractAnalysisSchema.countDocuments({
-                userId: user._id
+        // Check if user has reached their contract limit before proceeding
+        const contractCount = await ContractAnalysisSchema.countDocuments({
+            userId: user._id
+        });
+        
+        const contractLimit = getContractLimit(user);
+        
+        if (contractCount >= contractLimit) {
+            const planLevel = getUserPlanLevel(user);
+            return res.status(403).json({ 
+                error: `${planLevel.charAt(0).toUpperCase() + planLevel.slice(1)} plan limit reached`, 
+                message: `You've reached the limit of ${contractLimit} contracts on the ${planLevel} plan. Please upgrade to continue.`,
+                limitReached: true,
+                currentPlan: planLevel,
+                contractCount,
+                contractLimit
             });
-            
-            if (contractCount >= FREE_PLAN_CONTRACT_LIMIT) {
-                return res.status(403).json({ 
-                    error: "Free plan limit reached", 
-                    message: `You've reached the limit of ${FREE_PLAN_CONTRACT_LIMIT} contracts on the free plan. Please upgrade to continue.`,
-                    limitReached: true
-                });
-            }
         }
 
         const fileKey = `file:${user._id}:${Date.now()}`;
@@ -132,7 +154,8 @@ export const detectAndConfirmContractType = async (
         return res.json({ 
             detectedType,
             tempKey, // Send the temp key back to the client
-            canStore: hasGoldAccess(user) // Inform client if document storage is available
+            canStore: hasGoldAccess(user), // Inform client if document storage is available
+            remainingContracts: Math.max(0, contractLimit - contractCount - 1) // -1 for the current upload
         });
     } catch (error) {
         console.error("Contract type detection error:", error);
@@ -150,19 +173,23 @@ export const analyzeContract = async (
     const user = req.user as IUser;
     let { contractType, tempKey, storeOriginal } = req.body;
     
-    // For basic users, check if they've reached their contract limit before proceeding
-    if (!hasPremiumAccess(user)) {
-        const contractCount = await ContractAnalysisSchema.countDocuments({
-            userId: user._id
+    // Check if user has reached their contract limit before proceeding
+    const contractCount = await ContractAnalysisSchema.countDocuments({
+        userId: user._id
+    });
+    
+    const contractLimit = getContractLimit(user);
+    
+    if (contractCount >= contractLimit) {
+        const planLevel = getUserPlanLevel(user);
+        return res.status(403).json({ 
+            error: `${planLevel.charAt(0).toUpperCase() + planLevel.slice(1)} plan limit reached`, 
+            message: `You've reached the limit of ${contractLimit} contracts on the ${planLevel} plan. Please upgrade to continue.`,
+            limitReached: true,
+            currentPlan: planLevel,
+            contractCount,
+            contractLimit
         });
-        
-        if (contractCount >= FREE_PLAN_CONTRACT_LIMIT) {
-            return res.status(403).json({ 
-                error: "Free plan limit reached", 
-                message: `You've reached the limit of ${FREE_PLAN_CONTRACT_LIMIT} contracts on the free plan. Please upgrade to continue.`,
-                limitReached: true
-            });
-        }
     }
     
     let fileKey: string | null = null;
@@ -270,25 +297,17 @@ export const analyzeContract = async (
         if (tempKey) await redis.del(tempKey);
         if (fileKey) await redis.del(fileKey);
 
-        // Include contract usage stats in the response for basic users
-        if (!hasPremiumAccess(user)) {
-            const contractCount = await ContractAnalysisSchema.countDocuments({
-                userId: user._id
-            });
-            
-            return res.json({
-                ...savedAnalysis.toObject(),
-                usageStats: {
-                    contractCount,
-                    contractLimit: FREE_PLAN_CONTRACT_LIMIT,
-                    remainingContracts: Math.max(0, FREE_PLAN_CONTRACT_LIMIT - contractCount)
-                }
-            });
-        }
-
+        // Get updated contract count
+        const newContractCount = contractCount + 1;
+        
         return res.json({
             ...savedAnalysis.toObject(),
-            planUsed: userPlan
+            planUsed: userPlan,
+            usageStats: {
+                contractCount: newContractCount,
+                contractLimit: contractLimit,
+                remainingContracts: Math.max(0, contractLimit - newContractCount)
+            }
         });
     } catch (error: any) {
         console.error("analyzeContract error:", error);
@@ -685,11 +704,18 @@ export const getUserContracts = async (req: Request, res: Response): Promise<Res
 
         // Add user plan information to response
         const userPlan = getUserPlanLevel(user);
+        const contractLimit = getContractLimit(user);
+        const contractCount = contracts.length;
         
         return res.json({
             contracts,
             userPlan,
-            hasGoldAccess: hasGoldAccess(user)
+            hasGoldAccess: hasGoldAccess(user),
+            usageStats: {
+                contractCount,
+                contractLimit,
+                remainingContracts: Math.max(0, contractLimit - contractCount)
+            }
         });
     } catch (error) {
         console.error(error);
@@ -793,10 +819,20 @@ export const deleteContract = async (req: Request, res: Response): Promise<Respo
         await redis.del(cacheKey);
         console.log("Contract cache cleared for:", id);
 
-        // Return success response
+        // Return success response with updated usage stats
+        const contractCount = await ContractAnalysisSchema.countDocuments({
+            userId: user._id
+        });
+        const contractLimit = getContractLimit(user);
+
         return res.status(200).json({ 
             success: true, 
-            message: "Contract deleted successfully" 
+            message: "Contract deleted successfully",
+            usageStats: {
+                contractCount,
+                contractLimit,
+                remainingContracts: Math.max(0, contractLimit - contractCount)
+            }
         });
     } catch (error) {
         console.error("Error deleting contract:", error);
