@@ -40,6 +40,24 @@ interface ICustomRecommendation {
     recommendations: string[];
 }
 
+interface IContractDate {
+    _id: any;
+    dateType: 'start_date' | 'end_date' | 'renewal_date' | 'termination_notice' | 'payment_due' | 'review_date' | 'warranty_expiry' | 'other';
+    date: Date;
+    description: string;
+    clause: string; // The specific clause text containing this date
+    isActive: boolean; // Whether alerts are enabled for this date
+}
+
+interface IDateAlert {
+    contractDateId: string; // Reference to the contract date
+    reminderDays: number; // Days before the date to send reminder (1, 3, 7, 14, 30)
+    isActive: boolean;
+    emailSent: boolean;
+    scheduledDate: Date; // When to send the alert
+    createdAt: Date;
+}
+
 export interface IContractAnalysis extends Document {
     userId: IUser["_id"];
     projectId: mongoose.Types.ObjectId;
@@ -85,6 +103,11 @@ export interface IContractAnalysis extends Document {
     // Methods
     getLatestVersion(): number;
     getVersion(versionNumber: number): string | null;
+    contractDates: IContractDate[];
+    dateAlerts: IDateAlert[];
+    addContractDate(dateType: string, date: Date, description: string, clause: string): Promise<IContractAnalysis>;
+    toggleDateAlert(dateId: string, reminderDays: number, isActive: boolean): Promise<IContractAnalysis>;
+    getUpcomingDates(daysAhead?: number): IContractDate[];
 }
 
 
@@ -225,6 +248,61 @@ const ContractAnalysisSchema = new Schema({
         enum: ["basic", "premium", "gold"],
         default: "basic"
     },
+     contractDates: [{
+        dateType: {
+            type: String,
+            enum: ['start_date', 'end_date', 'renewal_date', 'termination_notice', 'payment_due', 'review_date', 'warranty_expiry', 'other'],
+            required: true
+        },
+        date: {
+            type: Date,
+            required: true
+        },
+        description: {
+            type: String,
+            required: true
+        },
+        clause: {
+            type: String,
+            required: true
+        },
+        isActive: {
+            type: Boolean,
+            default: true
+        },
+        _id: {
+            type: Schema.Types.ObjectId,
+            default: () => new mongoose.Types.ObjectId()
+        }
+    }],
+    
+    dateAlerts: [{
+        contractDateId: {
+            type: String,
+            required: true
+        },
+        reminderDays: {
+            type: Number,
+            enum: [1, 3, 7, 14, 30],
+            required: true
+        },
+        isActive: {
+            type: Boolean,
+            default: true
+        },
+        emailSent: {
+            type: Boolean,
+            default: false
+        },
+        scheduledDate: {
+            type: Date,
+            required: true
+        },
+        createdAt: {
+            type: Date,
+            default: Date.now
+        }
+    }],
     // Gold-specific fields
     modificationHistory: [{
         modifiedAt: {
@@ -470,6 +548,89 @@ ContractAnalysisSchema.statics.findWithChatHistory = function(userId: mongoose.T
         'chatHistory.0': { $exists: true }
     });
 };
+
+
+ContractAnalysisSchema.methods.addContractDate = function(
+    dateType: string, 
+    date: Date, 
+    description: string, 
+    clause: string
+): Promise<IContractAnalysis> {
+    if (!this.contractDates) {
+        this.contractDates = [];
+    }
+    
+    const contractDate: IContractDate = {
+        dateType: dateType as any,
+        date: date,
+        description: description,
+        clause: clause,
+        isActive: true,
+        _id: undefined
+    };
+    
+    this.contractDates.push(contractDate);
+    return this.save();
+};
+
+ContractAnalysisSchema.methods.toggleDateAlert = function(
+    dateId: string, 
+    reminderDays: number, 
+    isActive: boolean
+): Promise<IContractAnalysis> {
+    if (!this.dateAlerts) {
+        this.dateAlerts = [];
+    }
+    
+    // Find existing alert
+    const existingAlert = this.dateAlerts.find(
+        (alert: IDateAlert) => alert.contractDateId === dateId && alert.reminderDays === reminderDays
+    );
+    
+    if (existingAlert) {
+        existingAlert.isActive = isActive;
+        if (isActive && !existingAlert.emailSent) {
+            // Recalculate scheduled date
+            const contractDate = this.contractDates.find((cd: IContractDate) => cd._id.toString() === dateId);
+            if (contractDate) {
+                existingAlert.scheduledDate = new Date(contractDate.date.getTime() - (reminderDays * 24 * 60 * 60 * 1000));
+            }
+        }
+    } else if (isActive) {
+        // Create new alert
+        const contractDate = this.contractDates.find((cd: IContractDate) => cd._id.toString() === dateId);
+        if (contractDate) {
+            const scheduledDate = new Date(contractDate.date.getTime() - (reminderDays * 24 * 60 * 60 * 1000));
+            
+            const newAlert: IDateAlert = {
+                contractDateId: dateId,
+                reminderDays: reminderDays,
+                isActive: true,
+                emailSent: false,
+                scheduledDate: scheduledDate,
+                createdAt: new Date()
+            };
+            
+            this.dateAlerts.push(newAlert);
+        }
+    }
+    
+    return this.save();
+};
+
+ContractAnalysisSchema.methods.getUpcomingDates = function(daysAhead: number = 30): IContractDate[] {
+    const now = new Date();
+    const futureDate = new Date(now.getTime() + (daysAhead * 24 * 60 * 60 * 1000));
+    
+    return (this.contractDates || []).filter((date: IContractDate) => 
+        date.isActive && date.date >= now && date.date <= futureDate
+    ).sort((a: IContractDate, b: IContractDate) => a.date.getTime() - b.date.getTime());
+};
+
+// Add index for efficient querying of alerts
+ContractAnalysisSchema.index({ 'dateAlerts.scheduledDate': 1, 'dateAlerts.isActive': 1, 'dateAlerts.emailSent': 1 });
+ContractAnalysisSchema.index({ 'contractDates.date': 1, 'contractDates.isActive': 1 });
+
 
 // Static method to get user statistics
 ContractAnalysisSchema.statics.getUserStatistics = async function(userId: mongoose.Types.ObjectId) {

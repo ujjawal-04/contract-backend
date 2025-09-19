@@ -1,4 +1,4 @@
-// email.service.ts
+// src/services/email.service.ts - UPDATED VERSION WITHOUT AI FUNCTIONS
 import nodemailer from "nodemailer";
 
 // Create a transporter using environment variables
@@ -12,6 +12,7 @@ const transporter = nodemailer.createTransport({
   },
 });
 
+// Keep existing functions...
 export const sendPremiumConfirmationEmail = async (
   userEmail: string, 
   userName: string, 
@@ -685,7 +686,377 @@ export const sendPremiumConfirmationEmail = async (
   }
 };
 
-// Send welcome email for new basic users
+// NEW: Date alert email function
+export const sendDateAlertEmail = async (
+    userEmail: string,
+    userName: string,
+    contractId: string,
+    contractType: string,
+    dateInfo: {
+        dateType: string;
+        date: Date;
+        description: string;
+        clause: string;
+        daysUntil: number;
+    }
+) => {
+    try {
+        const urgencyConfig = getUrgencyConfig(dateInfo.daysUntil);
+        const dateTypeDisplay = formatDateType(dateInfo.dateType);
+
+        const info = await transporter.sendMail({
+            from: '"Lexalyze Alerts" <alerts@lexalyze.com>',
+            to: userEmail,
+            subject: `🔔 ${urgencyConfig.emoji} Contract Alert: ${dateTypeDisplay} in ${dateInfo.daysUntil} day${dateInfo.daysUntil !== 1 ? 's' : ''}`,
+            html: `
+                <!DOCTYPE html>
+                <html>
+                <head>
+                    <meta charset="utf-8">
+                    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                    <title>Contract Date Alert</title>
+                    <style>
+                        * {
+                            margin: 0;
+                            padding: 0;
+                            box-sizing: border-box;
+                        }
+                        
+                        body {
+                            margin: 0;
+                            padding: 0;
+                            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+                            background-color: #f5f7fa;
+                            color: #333333;
+                            line-height: 1.6;
+                        }
+                        
+                        .email-container {
+                            width: 100%;
+                            max-width: 600px;
+                            margin: 0 auto;
+                            background-color: #ffffff;
+                            border-radius: 12px;
+                            overflow: hidden;
+                            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
+                        }
+                        
+                        .wrapper {
+                            width: 100%;
+                            background-color: #f5f7fa;
+                            padding: 20px 0;
+                        }
+                        
+                        .header {
+                            padding: 30px;
+                            text-align: center;
+                            background: linear-gradient(135deg, ${urgencyConfig.color}, ${urgencyConfig.color}dd);
+                            color: white;
+                        }
+                        
+                        .header h1 {
+                            color: #ffffff;
+                            font-size: 24px;
+                            margin: 0 0 10px 0;
+                            font-weight: 700;
+                        }
+                        
+                        .header p {
+                            font-size: 16px;
+                            margin: 0;
+                            opacity: 0.9;
+                        }
+                        
+                        .content {
+                            padding: 30px;
+                        }
+                        
+                        .alert-box {
+                            background: ${urgencyConfig.bgColor};
+                            border-left: 5px solid ${urgencyConfig.color};
+                            border-radius: 8px;
+                            padding: 20px;
+                            margin: 20px 0;
+                        }
+                        
+                        .alert-box h3 {
+                            color: ${urgencyConfig.textColor};
+                            margin: 0 0 15px 0;
+                            font-size: 18px;
+                            font-weight: 600;
+                        }
+                        
+                        .date-info {
+                            background: #f8fafc;
+                            border-radius: 8px;
+                            padding: 20px;
+                            margin: 20px 0;
+                        }
+                        
+                        .date-row {
+                            display: flex;
+                            justify-content: space-between;
+                            align-items: center;
+                            padding: 8px 0;
+                            border-bottom: 1px solid #e5e7eb;
+                        }
+                        
+                        .date-row:last-child {
+                            border-bottom: none;
+                        }
+                        
+                        .date-label {
+                            font-weight: 600;
+                            color: #374151;
+                        }
+                        
+                        .date-value {
+                            color: #6b7280;
+                        }
+                        
+                        .clause-box {
+                            background: #f0f9ff;
+                            border: 1px solid #0ea5e9;
+                            border-radius: 8px;
+                            padding: 15px;
+                            margin: 20px 0;
+                        }
+                        
+                        .clause-box h4 {
+                            color: #0c4a6e;
+                            margin: 0 0 10px 0;
+                            font-size: 14px;
+                            font-weight: 600;
+                        }
+                        
+                        .clause-box p {
+                            color: #0c4a6e;
+                            margin: 0;
+                            font-size: 13px;
+                            font-style: italic;
+                        }
+                        
+                        .cta-button {
+                            display: inline-block;
+                            background: ${urgencyConfig.color};
+                            color: #ffffff;
+                            font-weight: 700;
+                            padding: 14px 28px;
+                            text-decoration: none;
+                            border-radius: 8px;
+                            font-size: 15px;
+                        }
+                        
+                        .cta-section {
+                            text-align: center;
+                            margin: 25px 0;
+                        }
+                        
+                        .footer {
+                            background: #f9fafb;
+                            padding: 20px;
+                            text-align: center;
+                            color: #6b7280;
+                            font-size: 13px;
+                        }
+                        
+                        @media only screen and (max-width: 600px) {
+                            .wrapper {
+                                padding: 10px 0;
+                            }
+                            
+                            .email-container {
+                                margin: 0 10px;
+                            }
+                            
+                            .header {
+                                padding: 25px 20px;
+                            }
+                            
+                            .content {
+                                padding: 25px 20px;
+                            }
+                            
+                            .date-row {
+                                flex-direction: column;
+                                align-items: flex-start;
+                            }
+                            
+                            .date-value {
+                                margin-top: 5px;
+                            }
+                        }
+                    </style>
+                </head>
+                <body>
+                    <table role="presentation" cellspacing="0" cellpadding="0" border="0" class="wrapper">
+                        <tr>
+                            <td>
+                                <div class="email-container">
+                                    <div class="header">
+                                        <h1>${urgencyConfig.emoji} Contract Date Alert</h1>
+                                        <p>Important date approaching for your ${contractType}</p>
+                                    </div>
+
+                                    <div class="content">
+                                        <p><strong>Hi ${userName},</strong></p>
+                                        <p>This is a friendly reminder about an important date in your contract:</p>
+
+                                        <div class="alert-box">
+                                            <h3>${urgencyConfig.title}</h3>
+                                            <p>${dateInfo.description} is scheduled for <strong>${formatDate(dateInfo.date)}</strong> - that's in ${dateInfo.daysUntil} day${dateInfo.daysUntil !== 1 ? 's' : ''}!</p>
+                                        </div>
+
+                                        <div class="date-info">
+                                            <div class="date-row">
+                                                <span class="date-label">Date Type:</span>
+                                                <span class="date-value">${dateTypeDisplay}</span>
+                                            </div>
+                                            <div class="date-row">
+                                                <span class="date-label">Due Date:</span>
+                                                <span class="date-value">${formatDate(dateInfo.date)}</span>
+                                            </div>
+                                            <div class="date-row">
+                                                <span class="date-label">Days Remaining:</span>
+                                                <span class="date-value" style="color: ${urgencyConfig.color}; font-weight: 600;">${dateInfo.daysUntil}</span>
+                                            </div>
+                                            <div class="date-row">
+                                                <span class="date-label">Contract Type:</span>
+                                                <span class="date-value">${contractType}</span>
+                                            </div>
+                                        </div>
+
+                                        <div class="clause-box">
+                                            <h4>📄 Related Contract Clause:</h4>
+                                            <p>"${dateInfo.clause}"</p>
+                                        </div>
+
+                                        <div class="cta-section">
+                                            <a href="${process.env.CLIENT_URL}/contracts/${contractId}" class="cta-button">
+                                                View Contract Details
+                                            </a>
+                                        </div>
+
+                                        <p style="font-size: 14px; color: #6b7280; margin-top: 25px;">
+                                            ${urgencyConfig.actionText}
+                                        </p>
+
+                                        <p style="margin-top: 20px;">
+                                            <strong>Best regards,</strong><br>
+                                            Your Lexalyze Alert System
+                                        </p>
+                                    </div>
+
+                                    <div class="footer">
+                                        <p>© 2025 Lexalyze. All rights reserved.</p>
+                                        <p style="margin-top: 8px; font-size: 12px;">
+                                            To manage your alert preferences, <a href="${process.env.CLIENT_URL}/contracts/${contractId}?tab=alerts" style="color: #3b82f6;">click here</a>
+                                        </p>
+                                    </div>
+                                </div>
+                            </td>
+                        </tr>
+                    </table>
+                </body>
+                </html>
+            `,
+            text: `
+                Contract Date Alert
+
+                Hi ${userName},
+
+                This is a reminder about an important date in your ${contractType} contract:
+
+                ${dateInfo.description} is scheduled for ${formatDate(dateInfo.date)} - that's in ${dateInfo.daysUntil} day${dateInfo.daysUntil !== 1 ? 's' : ''}!
+
+                Date Type: ${dateTypeDisplay}
+                Due Date: ${formatDate(dateInfo.date)}
+                Days Remaining: ${dateInfo.daysUntil}
+
+                Related Clause: "${dateInfo.clause}"
+
+                View Contract: ${process.env.CLIENT_URL}/contracts/${contractId}
+
+                ${urgencyConfig.actionText}
+
+                Best regards,
+                Your Lexalyze Alert System
+            `
+        });
+
+        console.log(`Date alert email sent successfully to ${userEmail}:`, info.messageId);
+        return info;
+    } catch (error) {
+        console.error("Error sending date alert email:", error);
+        throw error;
+    }
+};
+
+// Helper functions for email formatting
+const getUrgencyConfig = (daysUntil: number) => {
+    if (daysUntil <= 1) {
+        return {
+            emoji: '🚨',
+            color: '#dc2626',
+            bgColor: '#fee2e2',
+            textColor: '#991b1b',
+            title: 'URGENT: Date is Tomorrow or Today!',
+            actionText: 'This date is very soon - please take immediate action if required.'
+        };
+    } else if (daysUntil <= 3) {
+        return {
+            emoji: '⚠️',
+            color: '#f59e0b',
+            bgColor: '#fef3c7',
+            textColor: '#92400e',
+            title: 'Important Date Approaching Soon',
+            actionText: 'Please prepare for any actions needed regarding this date.'
+        };
+    } else if (daysUntil <= 7) {
+        return {
+            emoji: '📅',
+            color: '#3b82f6',
+            bgColor: '#dbeafe',
+            textColor: '#1d4ed8',
+            title: 'Upcoming Contract Date',
+            actionText: 'You have some time to prepare, but please plan accordingly.'
+        };
+    } else {
+        return {
+            emoji: '🔔',
+            color: '#10b981',
+            bgColor: '#d1fae5',
+            textColor: '#065f46',
+            title: 'Contract Date Reminder',
+            actionText: 'This is an early reminder to help you stay organized.'
+        };
+    }
+};
+
+const formatDateType = (dateType: string): string => {
+    const typeMap: { [key: string]: string } = {
+        'start_date': 'Contract Start',
+        'end_date': 'Contract End',
+        'renewal_date': 'Renewal Date',
+        'termination_notice': 'Termination Notice',
+        'payment_due': 'Payment Due',
+        'review_date': 'Review Date',
+        'warranty_expiry': 'Warranty Expiry',
+        'other': 'Important Date'
+    };
+    return typeMap[dateType] || 'Contract Date';
+};
+
+const formatDate = (date: Date): string => {
+    return date.toLocaleDateString('en-US', {
+        weekday: 'long',
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric'
+    });
+};
+
+// Keep existing functions unchanged...
 export const sendWelcomeEmail = async (userEmail: string, userName: string) => {
   try {
     const info = await transporter.sendMail({

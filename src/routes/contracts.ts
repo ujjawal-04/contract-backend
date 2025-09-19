@@ -12,7 +12,14 @@ import {
     modifyContract,
     downloadModifiedContract,
     generateRecommendations,
-    trackChanges
+    trackChanges,
+    // DATE ALERT FUNCTIONS 
+    getContractDates,
+    updateContractDateAlert,
+    addCustomContractDate,
+    deleteContractDate, // ADD THIS IMPORT
+    getUpcomingContractDates,
+    getAlertStatistics
 } from "../controllers/contract.controller";
 import { handleErrors } from "../middleware/errors";
 
@@ -25,6 +32,14 @@ router.post("/analyze", isAuthenticated, uploadMiddleware, handleErrors(analyzeC
 router.get("/user-contracts", isAuthenticated, handleErrors(getUserContracts));
 router.get("/contract/:id", isAuthenticated, handleErrors(getContractByID));
 router.delete("/:id", isAuthenticated, handleErrors(deleteContract));
+
+// Date and alert management routes (available to all authenticated users)
+router.get("/:id/dates", isAuthenticated, handleErrors(getContractDates));
+router.put("/:contractId/dates/:dateId/alerts", isAuthenticated, handleErrors(updateContractDateAlert));
+router.post("/:contractId/dates", isAuthenticated, handleErrors(addCustomContractDate));
+router.delete("/:contractId/dates/:dateId", isAuthenticated, handleErrors(deleteContractDate)); // ADD THIS ROUTE
+router.get("/upcoming-dates", isAuthenticated, handleErrors(getUpcomingContractDates));
+router.get("/alert-statistics", isAuthenticated, handleErrors(getAlertStatistics));
 
 // Gold-specific routes
 router.post("/chat", isAuthenticated, isGoldUser, handleErrors(chatWithContract));

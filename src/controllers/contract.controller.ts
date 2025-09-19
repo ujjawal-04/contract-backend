@@ -1,3 +1,5 @@
+// src/controllers/contract.controller.ts - FIXED VERSION
+
 import multer from "multer";
 import { IUser } from "../models/user.model";
 import { Request, Response } from "express";
@@ -9,12 +11,13 @@ import {
     modifyContractAI,
     chatWithContractAI,
     generateCustomRecommendations,
+    extractContractDates // ADD THIS IMPORT
 } from "../services/ai.services";
 import ContractAnalysisSchema, { IContractAnalysis } from "../models/contract.model";
 import mongoose, { FilterQuery } from "mongoose";
 import { isvalidMongoId } from "../utils/mongoUtils";
-// Removed unused PDFDocument and generateContractPDF imports
 import { generateModifiedContractPDF } from "../services/pdf.service";
+import { alertService } from "../services/alert.service"; // ADD THIS IMPORT
 
 // Define contract limits for each plan
 const FREE_PLAN_CONTRACT_LIMIT = 2;
@@ -27,7 +30,7 @@ const upload = multer({
     limits: {
         fileSize: 10 * 1024 * 1024, // 10MB limit
     },
-    fileFilter: (_req, file, cb) => { // Fixed: Added underscore to unused req parameter
+    fileFilter: (_req, file, cb) => {
         if (file.mimetype === "application/pdf") {
             cb(null, true);
         } else {
@@ -102,9 +105,9 @@ export const getUserContractStats = async (req: Request, res: Response) => {
 export const detectAndConfirmContractType = async (
     req: Request,
     res: Response
-): Promise<Response> => { // Fixed: Added return type
+): Promise<Response> => {
     const user = req.user as IUser;
-    const { storeDocument } = req.body; // Gold users can choose to store document
+    const { storeDocument } = req.body;
 
     if (!req.file) {
         return res.status(400).json({ error: "No file uploaded" });
@@ -169,7 +172,7 @@ export const detectAndConfirmContractType = async (
 export const analyzeContract = async (
     req: Request,
     res: Response
-): Promise<Response> => { // Fixed: Added return type
+): Promise<Response> => {
     const user = req.user as IUser;
     let { contractType, tempKey, storeOriginal } = req.body;
     
@@ -290,8 +293,16 @@ export const analyzeContract = async (
         });
         
         // Save the document
-        const savedAnalysis = await contractAnalysis.save();
+        const savedAnalysis = await contractAnalysis.save() as IContractAnalysis;
         console.log("Contract analysis saved with ID:", savedAnalysis._id);
+
+        // Process the contract for date extraction after saving
+        try {
+           await alertService.processContractForDates((savedAnalysis._id as mongoose.Types.ObjectId).toString());
+        } catch (dateError) {
+            console.error("Error processing contract for dates:", dateError);
+            // Don't fail the main request if date extraction fails
+        }
 
         // Clean up Redis keys
         if (tempKey) await redis.del(tempKey);
@@ -325,7 +336,7 @@ export const analyzeContract = async (
 };
 
 // Enhanced Gold-specific endpoint: Chat with contract
-export const chatWithContract = async (req: Request, res: Response): Promise<Response> => { // Fixed: Added return type
+export const chatWithContract = async (req: Request, res: Response): Promise<Response> => {
     const user = req.user as IUser;
     const { contractId, message } = req.body;
     
@@ -384,7 +395,7 @@ export const chatWithContract = async (req: Request, res: Response): Promise<Res
 };
 
 // Enhanced Gold-specific endpoint: Modify contract with recommendations integration
-export const modifyContract = async (req: Request, res: Response): Promise<Response> => { // Fixed: Added return type
+export const modifyContract = async (req: Request, res: Response): Promise<Response> => {
     const user = req.user as IUser;
     const { contractId, modifications, useRecommendations, customModifications } = req.body;
     
@@ -474,7 +485,7 @@ export const modifyContract = async (req: Request, res: Response): Promise<Respo
 };
 
 // New Gold endpoint: Download modified contract as PDF
-export const downloadModifiedContract = async (req: Request, res: Response): Promise<Response | void> => { // Fixed: Added return type
+export const downloadModifiedContract = async (req: Request, res: Response): Promise<Response | void> => {
     const user = req.user as IUser;
     const { contractId, version } = req.params;
     
@@ -495,7 +506,7 @@ export const downloadModifiedContract = async (req: Request, res: Response): Pro
         const contract = await ContractAnalysisSchema.findOne({
             _id: contractId,
             userId: user._id,
-        }) as IContractAnalysis | null; // Fixed: Added proper typing
+        }) as IContractAnalysis | null;
         
         if (!contract) {
             return res.status(404).json({ error: "Contract not found" });
@@ -531,7 +542,7 @@ export const downloadModifiedContract = async (req: Request, res: Response): Pro
                 companyName: "Lexalyze Gold",
                 userName: user.displayName || user.email,
                 generatedDate: new Date(),
-                 contractId: String(contract._id) // Fixed: Added toString()
+                contractId: String(contract._id)
             }
         );
         
@@ -547,7 +558,7 @@ export const downloadModifiedContract = async (req: Request, res: Response): Pro
 };
 
 // New Gold endpoint: Generate custom recommendations based on focus areas
-export const generateRecommendations = async (req: Request, res: Response): Promise<Response> => { // Fixed: Added return type
+export const generateRecommendations = async (req: Request, res: Response): Promise<Response> => {
     const user = req.user as IUser;
     const { contractId, focusAreas } = req.body;
     
@@ -606,7 +617,7 @@ export const generateRecommendations = async (req: Request, res: Response): Prom
 };
 
 // New Gold endpoint: Track changes comparison
-export const trackChanges = async (req: Request, res: Response): Promise<Response> => { // Fixed: Added return type
+export const trackChanges = async (req: Request, res: Response): Promise<Response> => {
     const user = req.user as IUser;
     const { contractId, version1, version2 } = req.query;
     
@@ -687,8 +698,265 @@ export const trackChanges = async (req: Request, res: Response): Promise<Respons
     }
 };
 
-// Existing endpoints remain the same...
-export const getUserContracts = async (req: Request, res: Response): Promise<Response> => { // Fixed: Added return type
+// DATE ALERT FUNCTIONS
+
+export const getContractDates = async (req: Request, res: Response): Promise<Response> => {
+    const user = req.user as IUser;
+    const { id } = req.params;
+
+    if (!isvalidMongoId(id)) {
+        return res.status(400).json({ error: "Invalid contract ID" });
+    }
+
+    try {
+        const contract = await ContractAnalysisSchema.findOne({
+            _id: id,
+            userId: user._id,
+        });
+
+        if (!contract) {
+            return res.status(404).json({ error: "Contract not found" });
+        }
+
+        // If no dates extracted yet, try to extract them
+        if (!contract.contractDates || contract.contractDates.length === 0) {
+            try {
+                const extractedDates = await extractContractDates(
+                    contract.contractText,
+                    contract.contractType
+                );
+
+                if (extractedDates.dates.length > 0) {
+                    // FIXED: Properly type the date info mapping
+                    contract.contractDates = extractedDates.dates.map((dateInfo: {
+                        dateType: string;
+                        date: string;
+                        description: string;
+                        clause: string;
+                        confidence: 'high' | 'medium' | 'low';
+                    }) => ({
+                        dateType: dateInfo.dateType as any,
+                        date: new Date(dateInfo.date),
+                        description: dateInfo.description,
+                        clause: dateInfo.clause,
+                        isActive: dateInfo.confidence === 'high',
+                        _id: new mongoose.Types.ObjectId()
+                    }));
+
+                    await contract.save();
+
+                    // Process for alert scheduling
+                    await alertService.processContractForDates(id);
+                }
+            } catch (extractError) {
+                console.error("Error extracting dates:", extractError);
+            }
+        }
+
+        // Get upcoming dates for quick view
+        const upcomingDates = contract.getUpcomingDates(60); // Next 60 days
+
+        return res.json({
+            contractDates: contract.contractDates || [],
+            dateAlerts: contract.dateAlerts || [],
+            upcomingDates: upcomingDates,
+            hasGoldAccess: hasGoldAccess(user)
+        });
+    } catch (error) {
+        console.error("Error getting contract dates:", error);
+        return res.status(500).json({ error: "Failed to get contract dates" });
+    }
+};
+
+export const updateContractDateAlert = async (req: Request, res: Response): Promise<Response> => {
+    const user = req.user as IUser;
+    const { contractId, dateId } = req.params;
+    const { reminderDays, isActive } = req.body;
+
+    if (!isvalidMongoId(contractId) || !reminderDays || typeof isActive !== 'boolean') {
+        return res.status(400).json({ error: "Invalid parameters" });
+    }
+
+    if (![1, 3, 7, 14, 30].includes(parseInt(reminderDays))) {
+        return res.status(400).json({ error: "Invalid reminder days. Must be 1, 3, 7, 14, or 30." });
+    }
+
+    try {
+        const contract = await ContractAnalysisSchema.findOne({
+            _id: contractId,
+            userId: user._id,
+        });
+
+        if (!contract) {
+            return res.status(404).json({ error: "Contract not found" });
+        }
+
+        // Toggle the alert
+        await contract.toggleDateAlert(dateId, parseInt(reminderDays), isActive);
+
+        return res.json({
+            success: true,
+            message: `Alert ${isActive ? 'activated' : 'deactivated'} for ${reminderDays} day${reminderDays !== '1' ? 's' : ''} reminder`
+        });
+    } catch (error) {
+        console.error("Error updating date alert:", error);
+        return res.status(500).json({ error: "Failed to update date alert" });
+    }
+};
+
+export const addCustomContractDate = async (req: Request, res: Response): Promise<Response> => {
+    const user = req.user as IUser;
+    const { contractId } = req.params;
+    const { dateType, date, description, clause } = req.body;
+
+    if (!isvalidMongoId(contractId)) {
+        return res.status(400).json({ error: "Invalid contract ID" });
+    }
+
+    if (!dateType || !date || !description || !clause) {
+        return res.status(400).json({ error: "All fields are required" });
+    }
+
+    try {
+        const contract = await ContractAnalysisSchema.findOne({
+            _id: contractId,
+            userId: user._id,
+        });
+
+        if (!contract) {
+            return res.status(404).json({ error: "Contract not found" });
+        }
+
+        const parsedDate = new Date(date);
+        if (isNaN(parsedDate.getTime())) {
+            return res.status(400).json({ error: "Invalid date format" });
+        }
+
+        // Add the custom date
+        await contract.addContractDate(dateType, parsedDate, description, clause);
+
+        // Process for alert scheduling
+        await alertService.processContractForDates(contractId);
+
+        return res.json({
+            success: true,
+            message: "Custom date added successfully"
+        });
+    } catch (error) {
+        console.error("Error adding custom date:", error);
+        return res.status(500).json({ error: "Failed to add custom date" });
+    }
+};
+
+export const getUpcomingContractDates = async (req: Request, res: Response): Promise<Response> => {
+    const user = req.user as IUser;
+    const { days = 30 } = req.query;
+
+    try {
+        const daysAhead = Math.min(parseInt(days as string) || 30, 90); // Max 90 days
+        const now = new Date();
+        const futureDate = new Date(now.getTime() + (daysAhead * 24 * 60 * 60 * 1000));
+
+        // Get all user's contracts with upcoming dates
+        const contracts = await ContractAnalysisSchema.find({
+            userId: user._id,
+            'contractDates.date': { $gte: now, $lte: futureDate },
+            'contractDates.isActive': true
+        }).select('contractType contractDates _id').sort({ 'contractDates.date': 1 });
+
+        // Flatten and sort all upcoming dates
+        const upcomingDates: Array<{
+            contractId: string;
+            contractType: string;
+            dateInfo: any;
+            daysUntil: number;
+            hasAlerts: boolean;
+        }> = [];
+
+        contracts.forEach(contract => {
+            contract.contractDates?.forEach(dateInfo => {
+                if (dateInfo.isActive && dateInfo.date >= now && dateInfo.date <= futureDate) {
+                    const daysUntil = Math.ceil((dateInfo.date.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+                    const hasAlerts = contract.dateAlerts?.some(alert => 
+                        alert.contractDateId === dateInfo._id.toString() && alert.isActive
+                    ) || false;
+
+                    upcomingDates.push({
+                        contractId: (contract._id as mongoose.Types.ObjectId).toString(),
+                        contractType: contract.contractType,
+                        dateInfo: dateInfo,
+                        daysUntil: daysUntil,
+                        hasAlerts: hasAlerts
+                    });
+                }
+            });
+        });
+
+        // Sort by date
+        upcomingDates.sort((a, b) => a.daysUntil - b.daysUntil);
+
+        return res.json({
+            upcomingDates: upcomingDates.slice(0, 50), // Limit to 50 results
+            totalFound: upcomingDates.length,
+            daysAhead: daysAhead
+        });
+    } catch (error) {
+        console.error("Error getting upcoming dates:", error);
+        return res.status(500).json({ error: "Failed to get upcoming dates" });
+    }
+};
+
+export const getAlertStatistics = async (req: Request, res: Response): Promise<Response> => {
+    const user = req.user as IUser;
+
+    try {
+        // Get user-specific stats
+        const userContracts = await ContractAnalysisSchema.find({ userId: user._id });
+        
+        let totalDates = 0;
+        let activeDates = 0;
+        let totalAlerts = 0;
+        let activeAlerts = 0;
+        const dateTypes: { [key: string]: number } = {};
+
+        userContracts.forEach(contract => {
+            if (contract.contractDates) {
+                totalDates += contract.contractDates.length;
+                contract.contractDates.forEach(date => {
+                    if (date.isActive) activeDates++;
+                    dateTypes[date.dateType] = (dateTypes[date.dateType] || 0) + 1;
+                });
+            }
+            
+            if (contract.dateAlerts) {
+                totalAlerts += contract.dateAlerts.length;
+                activeAlerts += contract.dateAlerts.filter(alert => alert.isActive).length;
+            }
+        });
+
+        // Get global stats (if user is interested)
+        const globalStats = await alertService.getAlertStats();
+
+        return res.json({
+            userStats: {
+                totalDates,
+                activeDates,
+                totalAlerts,
+                activeAlerts,
+                dateTypes,
+                contractsWithDates: userContracts.filter(c => c.contractDates?.length > 0).length
+            },
+            globalStats: globalStats
+        });
+    } catch (error) {
+        console.error("Error getting alert statistics:", error);
+        return res.status(500).json({ error: "Failed to get alert statistics" });
+    }
+};
+
+// EXISTING FUNCTIONS (unchanged)
+
+export const getUserContracts = async (req: Request, res: Response): Promise<Response> => {
     const user = req.user as IUser;
 
     try {
@@ -721,9 +989,9 @@ export const getUserContracts = async (req: Request, res: Response): Promise<Res
         console.error(error);
         return res.status(500).json({ error: "Failed to get contracts" });
     }
-}
+};
 
-export const getContractByID = async (req: Request, res: Response): Promise<Response> => { // Fixed: Added return type
+export const getContractByID = async (req: Request, res: Response): Promise<Response> => {
     const { id } = req.params;
     const user = req.user as IUser;
 
@@ -787,7 +1055,7 @@ export const getContractByID = async (req: Request, res: Response): Promise<Resp
 };
 
 // Add delete contract function
-export const deleteContract = async (req: Request, res: Response): Promise<Response> => { // Fixed: Added return type
+export const deleteContract = async (req: Request, res: Response): Promise<Response> => {
     const { id } = req.params;
     const user = req.user as IUser;
 
@@ -839,6 +1107,84 @@ export const deleteContract = async (req: Request, res: Response): Promise<Respo
         return res.status(500).json({ 
             error: "Failed to delete contract",
             message: error instanceof Error ? error.message : "Unknown error"
+        });
+    }
+};
+
+export const deleteContractDate = async (req: Request, res: Response): Promise<void> => {
+    try {
+        const { contractId, dateId } = req.params;
+        const userId = req.user?._id;
+
+        if (!userId) {
+            res.status(401).json({ error: "User not authenticated" });
+            return;
+        }
+
+        if (!contractId || !dateId) {
+            res.status(400).json({ 
+                error: "Contract ID and Date ID are required" 
+            });
+            return;
+        }
+
+        // Find the contract and verify ownership
+        const contract = await ContractAnalysisSchema.findOne({
+            _id: contractId,
+            userId: userId
+        });
+
+        if (!contract) {
+            res.status(404).json({ 
+                error: "Contract not found or access denied" 
+            });
+            return;
+        }
+
+        // Check if the date exists
+        const dateExists = contract.contractDates?.some(
+            date => date._id.toString() === dateId
+        );
+
+        if (!dateExists) {
+            res.status(404).json({ 
+                error: "Contract date not found" 
+            });
+            return;
+        }
+
+        // Remove the contract date
+        if (contract.contractDates) {
+            contract.contractDates = contract.contractDates.filter(
+                date => date._id.toString() !== dateId
+            );
+        }
+
+        // Remove all associated alerts for this date
+        if (contract.dateAlerts) {
+            contract.dateAlerts = contract.dateAlerts.filter(
+                alert => alert.contractDateId !== dateId
+            );
+        }
+
+        // Save the updated contract
+        await contract.save();
+
+        console.log(`✅ Deleted contract date ${dateId} and associated alerts for contract ${contractId}`);
+
+        res.status(200).json({
+            success: true,
+            message: "Contract date and associated alerts deleted successfully",
+            contractId: contractId,
+            deletedDateId: dateId
+        });
+
+    } catch (error) {
+        console.error("Error deleting contract date:", error);
+        
+        res.status(500).json({
+            error: "Failed to delete contract date",
+            message: error instanceof Error ? error.message : "Unknown error occurred"
         });
     }
 };

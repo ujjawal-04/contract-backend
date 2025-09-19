@@ -251,6 +251,88 @@ export const detectContractType = async (
     }
 };
 
+export const extractContractDates = async (
+    contractText: string,
+    contractType: string
+): Promise<{
+    dates: Array<{
+        dateType: string;
+        date: string; // ISO string
+        description: string;
+        clause: string;
+        confidence: 'high' | 'medium' | 'low';
+    }>;
+}> => {
+    try {
+        if (!aiModel) {
+            throw new Error("AI model not initialized");
+        }
+
+        const prompt = `Analyze the following ${contractType} contract and extract all important dates with their context. Focus on dates that would require reminders or alerts.
+
+        CONTRACT TEXT:
+        ${contractText}
+
+        Please identify and extract:
+        1. Contract start date
+        2. Contract end/expiration date
+        3. Renewal dates or deadlines
+        4. Termination notice periods/deadlines
+        5. Payment due dates
+        6. Review or evaluation dates
+        7. Warranty expiry dates
+        8. Any other contractually significant dates
+
+        For each date found, provide:
+        - dateType: one of ['start_date', 'end_date', 'renewal_date', 'termination_notice', 'payment_due', 'review_date', 'warranty_expiry', 'other']
+        - date: the actual date in ISO format (YYYY-MM-DD)
+        - description: clear description of what this date represents
+        - clause: the exact clause text containing this date (keep it concise, max 200 characters)
+        - confidence: your confidence level in the date extraction ('high', 'medium', 'low')
+
+        IMPORTANT GUIDELINES:
+        - Only extract dates that are contractually significant and would benefit from reminders
+        - Convert relative dates (e.g., "30 days after signing") to approximate dates if possible
+        - If you can't determine the exact date, mark confidence as 'low'
+        - Focus on future dates that would need monitoring
+        - Include context about what happens on each date
+
+        Format your response as a JSON object:
+        {
+            "dates": [
+                {
+                    "dateType": "start_date",
+                    "date": "2025-01-01",
+                    "description": "Contract commencement date",
+                    "clause": "This agreement shall commence on January 1, 2025...",
+                    "confidence": "high"
+                }
+            ]
+        }
+
+        Return ONLY the JSON object, no additional text or formatting.`;
+
+        const results = await aiModel.generateContent(prompt);
+        const response = results.response;
+        let rawResponseText = response.text();
+        
+        // Clean the response
+        let cleanedResponse = cleanJsonResponse(rawResponseText);
+        
+        try {
+            const extractedDates = JSON.parse(cleanedResponse);
+            return extractedDates;
+        } catch (jsonError) {
+            console.error("Failed to parse dates JSON:", jsonError);
+            return { dates: [] };
+        }
+    } catch (error: unknown) {
+        console.error("Contract dates extraction AI error:", error);
+        const apiError = error as ApiError;
+        throw new Error(`Failed to extract contract dates: ${apiError.message || "Unknown error"}`);
+    }
+};
+
 export const analyzeContractWithAI = async (
     contractText: string,
     tier: "basic" | "premium" | "gold",

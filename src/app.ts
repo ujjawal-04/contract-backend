@@ -10,6 +10,7 @@ import passport from "passport";
 import session from "express-session";
 import MongoStore from "connect-mongo";
 import "./config/passport"; // your passport config
+import { alertService } from './services/alert.service';
 
 // Routes
 import authRoute from "./routes/auth";
@@ -33,6 +34,20 @@ mongoose.connect(process.env.MONGODB_URI!)
 // IMPORTANT: Trust proxy - this is critical for Railway/Vercel
 app.set('trust proxy', 1);
 
+
+mongoose.connect(process.env.MONGODB_URI!)
+  .then(() => {
+    console.log("✅ Connected to MongoDB");
+    
+    // Initialize alert service after successful DB connection
+    setTimeout(() => {
+      alertService.init();
+      console.log("🔔 Alert service initialized");
+    }, 2000); // Small delay to ensure everything is ready
+  })
+  .catch((err) => console.error("❌ MongoDB Error:", err));
+
+  
 app.use(
   cors({
     origin: process.env.CLIENT_URL, // Replace with your frontend URL
