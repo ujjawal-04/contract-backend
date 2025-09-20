@@ -48,4 +48,5 @@ router.get("/download/:contractId/version/:version", isAuthenticated, isGoldUser
 router.post("/recommendations", isAuthenticated, isGoldUser, handleErrors(generateRecommendations));
 router.get("/track-changes", isAuthenticated, isGoldUser, handleErrors(trackChanges));
 
+
 export default router;
