@@ -616,87 +616,6 @@ export const generateRecommendations = async (req: Request, res: Response): Prom
     }
 };
 
-// New Gold endpoint: Track changes comparison
-export const trackChanges = async (req: Request, res: Response): Promise<Response> => {
-    const user = req.user as IUser;
-    const { contractId, version1, version2 } = req.query;
-    
-    // Check if user has Gold access
-    if (!hasGoldAccess(user)) {
-        return res.status(403).json({
-            error: "Gold subscription required",
-            message: "Track changes is only available for Gold subscribers"
-        });
-    }
-    
-    if (!isvalidMongoId(contractId as string)) {
-        return res.status(400).json({ error: "Invalid contract ID" });
-    }
-    
-    try {
-        // Get the contract
-        const contract = await ContractAnalysisSchema.findOne({
-            _id: contractId,
-            userId: user._id,
-        });
-        
-        if (!contract) {
-            return res.status(404).json({ error: "Contract not found" });
-        }
-        
-        // Get versions to compare
-        let content1: string, content2: string;
-        
-        // Get first version content
-        if (version1 === "original" || version1 === "1") {
-            content1 = contract.contractText;
-        } else {
-            const mod1 = contract.modificationHistory?.find(
-                m => m.version === parseInt(version1 as string)
-            );
-            if (!mod1 || !mod1.modifiedContent) {
-                return res.status(404).json({ error: "Version 1 not found" });
-            }
-            content1 = mod1.modifiedContent;
-        }
-        
-        // Get second version content
-        if (version2 === "original" || version2 === "1") {
-            content2 = contract.contractText;
-        } else {
-            const mod2 = contract.modificationHistory?.find(
-                m => m.version === parseInt(version2 as string)
-            );
-            if (!mod2 || !mod2.modifiedContent) {
-                return res.status(404).json({ error: "Version 2 not found" });
-            }
-            content2 = mod2.modifiedContent;
-        }
-        
-        // Simple change tracking (in production, use a proper diff library)
-        const changes = {
-            version1: version1,
-            version2: version2,
-            additions: [], // Parts added in version2
-            deletions: [], // Parts removed from version1
-            modifications: [] // Parts changed between versions
-        };
-        
-        // You would implement proper diff logic here
-        // For now, returning a simple comparison structure
-        
-        return res.json({
-            contractId: contractId,
-            comparison: changes,
-            version1Content: content1,
-            version2Content: content2
-        });
-        
-    } catch (error) {
-        console.error("Error tracking changes:", error);
-        return res.status(500).json({ error: "Failed to track changes" });
-    }
-};
 
 // DATE ALERT FUNCTIONS
 
@@ -1188,3 +1107,427 @@ export const deleteContractDate = async (req: Request, res: Response): Promise<v
         });
     }
 };
+
+export const trackChanges = async (req: Request, res: Response): Promise<Response> => {
+    const user = req.user as IUser;
+    const { contractId, version1, version2 } = req.query;
+    
+    // Check if user has Gold access
+    if (!hasGoldAccess(user)) {
+        return res.status(403).json({
+            error: "Gold subscription required",
+            message: "Track changes is only available for Gold subscribers"
+        });
+    }
+    
+    if (!isvalidMongoId(contractId as string)) {
+        return res.status(400).json({ error: "Invalid contract ID" });
+    }
+    
+    try {
+        const contract = await ContractAnalysisSchema.findOne({
+            _id: contractId,
+            userId: user._id,
+        });
+        
+        if (!contract) {
+            return res.status(404).json({ error: "Contract not found" });
+        }
+        
+        // Get versions to compare
+        let content1: string, content2: string;
+        let version1Label: string, version2Label: string;
+        
+        // Get first version content
+        if (version1 === "original" || version1 === "1") {
+            content1 = contract.contractText;
+            version1Label = "Original Version";
+        } else {
+            const mod1 = contract.modificationHistory?.find(
+                m => m.version === parseInt(version1 as string)
+            );
+            if (!mod1 || !mod1.modifiedContent) {
+                return res.status(404).json({ error: "Version 1 not found" });
+            }
+            content1 = mod1.modifiedContent;
+            version1Label = `Version ${version1}`;
+        }
+        
+        // Get second version content  
+        if (version2 === "original" || version2 === "1") {
+            content2 = contract.contractText;
+            version2Label = "Original Version";
+        } else {
+            const mod2 = contract.modificationHistory?.find(
+                m => m.version === parseInt(version2 as string)
+            );
+            if (!mod2 || !mod2.modifiedContent) {
+                return res.status(404).json({ error: "Version 2 not found" });
+            }
+            content2 = mod2.modifiedContent;
+            version2Label = `Version ${version2}`;
+        }
+        
+        // Simple but effective change detection
+        const changes = [];
+        let totalChanges = 0;
+        
+        // Split content into paragraphs for comparison
+        const paragraphs1 = content1.split(/\n\s*\n/).filter(p => p.trim().length > 0);
+        const paragraphs2 = content2.split(/\n\s*\n/).filter(p => p.trim().length > 0);
+        
+        const maxParagraphs = Math.max(paragraphs1.length, paragraphs2.length);
+        
+        for (let i = 0; i < maxParagraphs; i++) {
+            const para1 = paragraphs1[i]?.trim() || '';
+            const para2 = paragraphs2[i]?.trim() || '';
+            
+            if (para1 !== para2) {
+                totalChanges++;
+                
+                if (!para1 && para2) {
+                    // Addition
+                    changes.push({
+                        type: "addition",
+                        content: `Added new content: "${para2.substring(0, 100)}${para2.length > 100 ? '...' : ''}"`,
+                        location: `Section ${i + 1}`,
+                        context: `New content added in ${version2Label}`
+                    });
+                } else if (para1 && !para2) {
+                    // Deletion
+                    changes.push({
+                        type: "deletion", 
+                        content: `Removed content: "${para1.substring(0, 100)}${para1.length > 100 ? '...' : ''}"`,
+                        location: `Section ${i + 1}`,
+                        context: `Content removed in ${version2Label}`
+                    });
+                } else if (para1 && para2) {
+                    // Modification
+                    changes.push({
+                        type: "modification",
+                        content: `Modified content: "${para2.substring(0, 100)}${para2.length > 100 ? '...' : ''}"`,
+                        location: `Section ${i + 1}`,
+                        context: `Content changed from previous version`
+                    });
+                }
+                
+                // Limit to 20 changes for performance
+                if (changes.length >= 20) break;
+            }
+        }
+        
+        return res.json({
+            version1: version1,
+            version2: version2,
+            changes: changes,
+            summary: `Comparison between ${version1Label} and ${version2Label}: ${totalChanges} total changes detected.`,
+            totalChanges: totalChanges
+        });
+        
+    } catch (error) {
+        console.error("Error tracking changes:", error);
+        return res.status(500).json({ error: "Failed to track changes" });
+    }
+};
+
+// Helper function to detect changes between two versions
+const detectChanges = (content1: string, content2: string, version1Info: any, version2Info: any) => {
+    const changes: Array<{
+        type: 'addition' | 'deletion' | 'modification';
+        content: string;
+        location: string;
+        context: string;
+        severity?: 'low' | 'medium' | 'high';
+        lineNumber?: number;
+    }> = [];
+    
+    // Split content into lines for comparison
+    const lines1 = content1.split('\n').map(line => line.trim()).filter(line => line.length > 0);
+    const lines2 = content2.split('\n').map(line => line.trim()).filter(line => line.length > 0);
+    
+    // Simple line-by-line comparison (you can enhance this with proper diff algorithms)
+    const maxLines = Math.max(lines1.length, lines2.length);
+    
+    for (let i = 0; i < maxLines; i++) {
+        const line1 = lines1[i] || '';
+        const line2 = lines2[i] || '';
+        
+        if (line1 !== line2) {
+            if (!line1 && line2) {
+                // Addition
+                changes.push({
+                    type: 'addition',
+                    content: line2,
+                    location: `Line ${i + 1}`,
+                    context: `Added in ${version2Info.label}`,
+                    severity: determineSeverity(line2),
+                    lineNumber: i + 1
+                });
+            } else if (line1 && !line2) {
+                // Deletion
+                changes.push({
+                    type: 'deletion',
+                    content: line1,
+                    location: `Line ${i + 1}`,
+                    context: `Removed from ${version1Info.label}`,
+                    severity: determineSeverity(line1),
+                    lineNumber: i + 1
+                });
+            } else if (line1 && line2) {
+                // Modification
+                changes.push({
+                    type: 'modification',
+                    content: `"${line1}" → "${line2}"`,
+                    location: `Line ${i + 1}`,
+                    context: `Modified from ${version1Info.label} to ${version2Info.label}`,
+                    severity: determineSeverity(line2),
+                    lineNumber: i + 1
+                });
+            }
+        }
+    }
+    
+    // If no line-by-line changes found but content is different, detect paragraph-level changes
+    if (changes.length === 0 && content1 !== content2) {
+        const paragraphs1 = content1.split('\n\n').filter(p => p.trim().length > 0);
+        const paragraphs2 = content2.split('\n\n').filter(p => p.trim().length > 0);
+        
+        for (let i = 0; i < Math.max(paragraphs1.length, paragraphs2.length); i++) {
+            const para1 = paragraphs1[i] || '';
+            const para2 = paragraphs2[i] || '';
+            
+            if (para1 !== para2) {
+                if (!para1 && para2) {
+                    changes.push({
+                        type: 'addition',
+                        content: para2.substring(0, 100) + (para2.length > 100 ? '...' : ''),
+                        location: `Paragraph ${i + 1}`,
+                        context: `New paragraph added in ${version2Info.label}`,
+                        severity: determineSeverity(para2)
+                    });
+                } else if (para1 && !para2) {
+                    changes.push({
+                        type: 'deletion',
+                        content: para1.substring(0, 100) + (para1.length > 100 ? '...' : ''),
+                        location: `Paragraph ${i + 1}`,
+                        context: `Paragraph removed from ${version1Info.label}`,
+                        severity: determineSeverity(para1)
+                    });
+                } else {
+                    changes.push({
+                        type: 'modification',
+                        content: `Paragraph modified (${para2.length - para1.length > 0 ? '+' : ''}${para2.length - para1.length} characters)`,
+                        location: `Paragraph ${i + 1}`,
+                        context: `Content modified from ${version1Info.label} to ${version2Info.label}`,
+                        severity: determineSeverity(para2)
+                    });
+                }
+            }
+        }
+    }
+    
+    return changes;
+};
+
+// Helper function to determine severity of changes
+const determineSeverity = (content: string): 'low' | 'medium' | 'high' => {
+    const lowercaseContent = content.toLowerCase();
+    
+    // High severity keywords
+    const highSeverityKeywords = [
+        'liability', 'termination', 'breach', 'penalty', 'damages', 'indemnity',
+        'confidential', 'proprietary', 'intellectual property', 'copyright',
+        'payment', 'fee', 'cost', 'price', 'amount', 'compensation'
+    ];
+    
+    // Medium severity keywords
+    const mediumSeverityKeywords = [
+        'obligation', 'responsibility', 'requirement', 'deadline', 'timeline',
+        'delivery', 'performance', 'standard', 'compliance', 'warranty'
+    ];
+    
+    if (highSeverityKeywords.some(keyword => lowercaseContent.includes(keyword))) {
+        return 'high';
+    } else if (mediumSeverityKeywords.some(keyword => lowercaseContent.includes(keyword))) {
+        return 'medium';
+    }
+    
+    return 'low';
+};
+
+// Helper function to generate change summary
+const generateChangeSummary = (changes: any[], version1Info: any, version2Info: any): string => {
+    const totalChanges = changes.length;
+    const additions = changes.filter(c => c.type === 'addition').length;
+    const deletions = changes.filter(c => c.type === 'deletion').length;
+    const modifications = changes.filter(c => c.type === 'modification').length;
+    
+    if (totalChanges === 0) {
+        return `No changes detected between ${version1Info.label} and ${version2Info.label}.`;
+    }
+    
+    let summary = `${totalChanges} change${totalChanges > 1 ? 's' : ''} detected between ${version1Info.label} and ${version2Info.label}. `;
+    
+    const changeParts = [];
+    if (additions > 0) changeParts.push(`${additions} addition${additions > 1 ? 's' : ''}`);
+    if (deletions > 0) changeParts.push(`${deletions} deletion${deletions > 1 ? 's' : ''}`);
+    if (modifications > 0) changeParts.push(`${modifications} modification${modifications > 1 ? 's' : ''}`);
+    
+    summary += `This includes ${changeParts.join(', ')}.`;
+    
+    // Add severity assessment
+    const highSeverityChanges = changes.filter(c => c.severity === 'high').length;
+    if (highSeverityChanges > 0) {
+        summary += ` ${highSeverityChanges} change${highSeverityChanges > 1 ? 's' : ''} marked as high severity requiring careful review.`;
+    }
+    
+    return summary;
+};
+
+// Helper function to calculate impact level
+const calculateImpactLevel = (changes: any[]): 'low' | 'medium' | 'high' => {
+    const highSeverityCount = changes.filter(c => c.severity === 'high').length;
+    const mediumSeverityCount = changes.filter(c => c.severity === 'medium').length;
+    const totalChanges = changes.length;
+    
+    if (highSeverityCount > 0 || totalChanges > 10) {
+        return 'high';
+    } else if (mediumSeverityCount > 0 || totalChanges > 3) {
+        return 'medium';
+    }
+    
+    return 'low';
+};
+
+// Add version content viewing endpoint
+export const getVersionContent = async (req: Request, res: Response): Promise<Response> => {
+    const user = req.user as IUser;
+    const { contractId, version } = req.params;
+    
+    if (!isvalidMongoId(contractId)) {
+        return res.status(400).json({ error: "Invalid contract ID" });
+    }
+    
+    try {
+        const contract = await ContractAnalysisSchema.findOne({
+            _id: contractId,
+            userId: user._id,
+        });
+        
+        if (!contract) {
+            return res.status(404).json({ error: "Contract not found" });
+        }
+        
+        let content: string;
+        let versionInfo: any;
+        
+        if (version === "original" || version === "1") {
+            content = contract.contractText;
+            versionInfo = {
+                version: "1",
+                label: "Original Version",
+                date: contract.createdAt,
+                modifiedBy: "System",
+                changes: "Initial contract upload"
+            };
+        } else {
+            const modification = contract.modificationHistory?.find(
+                m => m.version === parseInt(version)
+            );
+            
+            if (!modification) {
+                return res.status(404).json({ error: "Version not found" });
+            }
+            
+            content = modification.modifiedContent || contract.contractText;
+            versionInfo = {
+                version: modification.version,
+                label: `Version ${modification.version}`,
+                date: modification.modifiedAt,
+                modifiedBy: modification.modifiedBy,
+                changes: modification.changes
+            };
+        }
+        
+        return res.json({
+            contractId,
+            versionInfo,
+            content,
+            metadata: {
+                contractType: contract.contractType,
+                wordCount: content.split(' ').length,
+                characterCount: content.length,
+                retrievedAt: new Date()
+            }
+        });
+        
+    } catch (error) {
+        console.error("Error getting version content:", error);
+        return res.status(500).json({ error: "Failed to get version content" });
+    }
+};
+
+// New Gold endpoint: View contract content by version
+export const viewContract = async (req: Request, res: Response): Promise<Response> => {
+    const user = req.user as IUser;
+    const { contractId, version } = req.params;
+    
+    // Check if user has Gold access for viewing different versions
+    if (version !== "original" && !hasGoldAccess(user)) {
+        return res.status(403).json({
+            error: "Gold subscription required",
+            message: "Viewing modified contract versions is only available for Gold subscribers"
+        });
+    }
+    
+    if (!isvalidMongoId(contractId)) {
+        return res.status(400).json({ error: "Invalid contract ID" });
+    }
+    
+    try {
+        // Get the contract
+        const contract = await ContractAnalysisSchema.findOne({
+            _id: contractId,
+            userId: user._id,
+        });
+        
+        if (!contract) {
+            return res.status(404).json({ error: "Contract not found" });
+        }
+        
+        // Get the requested version content
+        let contractContent: string;
+        let versionInfo: string;
+        
+        if (version === "original" || version === "1") {
+            contractContent = contract.contractText;
+            versionInfo = "Original Version";
+        } else {
+            const versionNum = parseInt(version);
+            const modification = contract.modificationHistory?.find(
+                mod => mod.version === versionNum
+            );
+            
+            if (!modification || !modification.modifiedContent) {
+                return res.status(404).json({ error: "Contract version not found" });
+            }
+            
+            contractContent = modification.modifiedContent;
+            versionInfo = `Version ${versionNum} - Modified on ${new Date(modification.modifiedAt).toLocaleDateString()}`;
+        }
+        
+        return res.json({
+            content: contractContent,
+            version: version,
+            versionInfo: versionInfo,
+            contractType: contract.contractType,
+            contractId: contractId
+        });
+        
+    } catch (error) {
+        console.error("Error viewing contract:", error);
+        return res.status(500).json({ error: "Failed to view contract" });
+    }
+};
+
+

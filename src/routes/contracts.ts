@@ -1,3 +1,5 @@
+// src/routes/contracts.ts - ADD THESE ROUTES
+
 import express from "express";
 import { isAuthenticated, isGoldUser } from "../middleware/auth";
 import {
@@ -12,14 +14,16 @@ import {
     modifyContract,
     downloadModifiedContract,
     generateRecommendations,
-    trackChanges,
+    trackChanges, // ADD THIS
+    getVersionContent, // ADD THIS
     // DATE ALERT FUNCTIONS 
     getContractDates,
     updateContractDateAlert,
     addCustomContractDate,
-    deleteContractDate, // ADD THIS IMPORT
+    deleteContractDate,
     getUpcomingContractDates,
-    getAlertStatistics
+    getAlertStatistics,
+    viewContract
 } from "../controllers/contract.controller";
 import { handleErrors } from "../middleware/errors";
 
@@ -37,16 +41,20 @@ router.delete("/:id", isAuthenticated, handleErrors(deleteContract));
 router.get("/:id/dates", isAuthenticated, handleErrors(getContractDates));
 router.put("/:contractId/dates/:dateId/alerts", isAuthenticated, handleErrors(updateContractDateAlert));
 router.post("/:contractId/dates", isAuthenticated, handleErrors(addCustomContractDate));
-router.delete("/:contractId/dates/:dateId", isAuthenticated, handleErrors(deleteContractDate)); // ADD THIS ROUTE
+router.delete("/:contractId/dates/:dateId", isAuthenticated, handleErrors(deleteContractDate));
 router.get("/upcoming-dates", isAuthenticated, handleErrors(getUpcomingContractDates));
 router.get("/alert-statistics", isAuthenticated, handleErrors(getAlertStatistics));
+
+// Version content viewing (available to all authenticated users)
+router.get("/:contractId/version/:version/content", isAuthenticated, handleErrors(getVersionContent));
 
 // Gold-specific routes
 router.post("/chat", isAuthenticated, isGoldUser, handleErrors(chatWithContract));
 router.post("/modify", isAuthenticated, isGoldUser, handleErrors(modifyContract));
 router.get("/download/:contractId/version/:version", isAuthenticated, isGoldUser, handleErrors(downloadModifiedContract));
 router.post("/recommendations", isAuthenticated, isGoldUser, handleErrors(generateRecommendations));
-router.get("/track-changes", isAuthenticated, isGoldUser, handleErrors(trackChanges));
-
+router.get("/track-changes", isAuthenticated, isGoldUser, handleErrors(trackChanges)); // ADD THIS
+router.get("/compare-versions", isAuthenticated, isGoldUser, handleErrors(trackChanges)); // ALIAS FOR TRACK CHANGES
+router.get("/view/:contractId/version/:version", isAuthenticated, isGoldUser, handleErrors(viewContract));
 
 export default router;
