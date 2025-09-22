@@ -1,7 +1,7 @@
-// src/routes/contracts.ts - ADD THESE ROUTES
+// src/routes/contracts.ts - ADD THESE ROUTES TO YOUR EXISTING ROUTES FILE
 
 import express from "express";
-import { isAuthenticated, isGoldUser } from "../middleware/auth";
+import { isAuthenticated, isGoldUser, isPremiumUser } from "../middleware/auth"; // Add isPremiumUser if needed
 import {
     analyzeContract,
     detectAndConfirmContractType,
@@ -14,8 +14,10 @@ import {
     modifyContract,
     downloadModifiedContract,
     generateRecommendations,
-    trackChanges, // ADD THIS
-    getVersionContent, // ADD THIS
+    trackChanges,
+    getVersionContent,
+    reAnalyzeContract,
+    getReAnalysisResults,
     // DATE ALERT FUNCTIONS 
     getContractDates,
     updateContractDateAlert,
@@ -37,6 +39,10 @@ router.get("/user-contracts", isAuthenticated, handleErrors(getUserContracts));
 router.get("/contract/:id", isAuthenticated, handleErrors(getContractByID));
 router.delete("/:id", isAuthenticated, handleErrors(deleteContract));
 
+// RE-ANALYSIS ROUTES (Premium+ required)
+router.post("/reanalyze", isAuthenticated, handleErrors(reAnalyzeContract)); // ADD THIS LINE
+router.get("/:contractId/reanalysis-results", isAuthenticated, handleErrors(getReAnalysisResults)); // ADD THIS LINE
+
 // Date and alert management routes (available to all authenticated users)
 router.get("/:id/dates", isAuthenticated, handleErrors(getContractDates));
 router.put("/:contractId/dates/:dateId/alerts", isAuthenticated, handleErrors(updateContractDateAlert));
@@ -53,7 +59,7 @@ router.post("/chat", isAuthenticated, isGoldUser, handleErrors(chatWithContract)
 router.post("/modify", isAuthenticated, isGoldUser, handleErrors(modifyContract));
 router.get("/download/:contractId/version/:version", isAuthenticated, isGoldUser, handleErrors(downloadModifiedContract));
 router.post("/recommendations", isAuthenticated, isGoldUser, handleErrors(generateRecommendations));
-router.get("/track-changes", isAuthenticated, isGoldUser, handleErrors(trackChanges)); // ADD THIS
+router.get("/track-changes", isAuthenticated, isGoldUser, handleErrors(trackChanges));
 router.get("/compare-versions", isAuthenticated, isGoldUser, handleErrors(trackChanges)); // ALIAS FOR TRACK CHANGES
 router.get("/view/:contractId/version/:version", isAuthenticated, isGoldUser, handleErrors(viewContract));
 

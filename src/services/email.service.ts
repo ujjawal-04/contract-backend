@@ -305,7 +305,7 @@ export const sendPremiumConfirmationEmail = async (
             .cta-button {
               display: inline-block;
               background: linear-gradient(135deg, ${config.color}, ${config.color}dd);
-              color: #ffffff;
+              color: #ffffff !important;
               font-weight: 700;
               padding: 16px 32px;
               text-decoration: none;
@@ -314,6 +314,8 @@ export const sendPremiumConfirmationEmail = async (
               transition: transform 0.2s, box-shadow 0.2s;
               box-shadow: 0 4px 12px ${config.color}40;
               line-height: 1.4;
+              /* Remove any text-shadow or color overrides */
+              text-shadow: none !important;
             }
             
             /* Support section */

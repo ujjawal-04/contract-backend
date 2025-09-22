@@ -1530,4 +1530,203 @@ export const viewContract = async (req: Request, res: Response): Promise<Respons
     }
 };
 
+export const reAnalyzeContract = async (req: Request, res: Response): Promise<Response> => {
+    const user = req.user as IUser;
+    const { contractId, version, contractContent, contractType, versionNumber } = req.body;
+    
+    // Check if user has premium access for re-analysis
+    if (!hasPremiumAccess(user)) {
+        return res.status(403).json({
+            error: "Premium subscription required",
+            message: "Re-analysis is only available for Premium and Gold subscribers"
+        });
+    }
+
+    // Validate required fields
+    if (!contractId || !contractContent) {
+        return res.status(400).json({ 
+            error: "Missing required fields",
+            message: "Contract ID and content are required for re-analysis" 
+        });
+    }
+
+    if (!isvalidMongoId(contractId)) {
+        return res.status(400).json({ error: "Invalid contract ID" });
+    }
+
+    try {
+        // Verify contract ownership
+        const contract = await ContractAnalysisSchema.findOne({
+            _id: contractId,
+            userId: user._id,
+        });
+
+        if (!contract) {
+            return res.status(404).json({ error: "Contract not found" });
+        }
+
+        // Get user's plan for analysis
+        const userPlan = getUserPlanLevel(user);
+
+        // Re-analyze the contract content with AI
+        console.log(`Re-analyzing contract ${contractId} version ${versionNumber || 0} for user ${user.email}`);
+        
+        let analysis: any;
+        try {
+            analysis = await analyzeContractWithAI(contractContent, userPlan, contractType || contract.contractType);
+            
+            // Parse the AI response if it's a string
+            if (typeof analysis === 'string') {
+                analysis = JSON.parse(analysis);
+            }
+        } catch (parseError) {
+            console.error("Failed to parse AI response:", parseError);
+            throw new Error("Failed to parse AI analysis response");
+        }
+
+        // Validate analysis result
+        if (!analysis || typeof analysis !== 'object') {
+            throw new Error("Invalid analysis result received");
+        }
+
+        // Prepare the response with re-analysis results
+        const reAnalysisResult = {
+            contractId: contractId,
+            version: versionNumber || 0,
+            overallScore: analysis.overallScore || 0,
+            summary: analysis.summary || "No summary available",
+            risks: analysis.risks || [],
+            opportunities: analysis.opportunities || [],
+            recommendations: analysis.recommendations || [],
+            keyClauses: analysis.keyClauses || [],
+            legalCompliance: analysis.legalCompliance || "",
+            negotiationPoints: analysis.negotiationPoints || [],
+            contractDuration: analysis.contractDuration || "",
+            terminationConditions: analysis.terminationConditions || "",
+            financialTerms: analysis.financialTerms || { description: "", details: [] },
+            performanceMetrics: analysis.performanceMetrics || [],
+            specificClauses: analysis.specificClauses || "",
+            intellectualPropertyClauses: analysis.intellectualPropertyClauses || [],
+            analysisDate: new Date().toISOString(),
+            userPlan: userPlan,
+            isReAnalysis: true
+        };
+
+        // For Gold users, optionally save re-analysis history
+        if (hasGoldAccess(user)) {
+            try {
+                // You might want to create a separate collection for re-analysis results
+                // or add them to the contract document as you prefer
+                
+                // Option 1: Add to contract's custom field (simple approach)
+                if (!contract.customFields) {
+                    contract.customFields = {};
+                }
+                
+                const reAnalysisKey = `reanalysis_v${versionNumber || 0}_${Date.now()}`;
+                contract.customFields[reAnalysisKey] = JSON.stringify({
+                    version: versionNumber || 0,
+                    overallScore: analysis.overallScore,
+                    summary: analysis.summary,
+                    analysisDate: new Date(),
+                    risks: analysis.risks?.length || 0,
+                    opportunities: analysis.opportunities?.length || 0
+                });
+                
+                await contract.save();
+                console.log(`Re-analysis history saved for contract ${contractId}`);
+                
+            } catch (saveError) {
+                console.error("Failed to save re-analysis history:", saveError);
+                // Don't fail the request if history saving fails
+            }
+        }
+
+        console.log(`Re-analysis completed for contract ${contractId}, score: ${analysis.overallScore}`);
+
+        return res.status(200).json(reAnalysisResult);
+
+    } catch (error: any) {
+        console.error("Re-analysis error:", error);
+        
+        let errorMessage = "Failed to re-analyze contract";
+        let statusCode = 500;
+
+        if (error.message?.includes("AI analysis")) {
+            errorMessage = "AI analysis service temporarily unavailable";
+            statusCode = 503;
+        } else if (error.message?.includes("parse")) {
+            errorMessage = "Failed to process analysis results";
+        } else if (error.message?.includes("quota") || error.message?.includes("limit")) {
+            errorMessage = "Analysis service quota exceeded, please try again later";
+            statusCode = 429;
+        }
+
+        return res.status(statusCode).json({ 
+            error: errorMessage,
+            message: error instanceof Error ? error.message : "Unknown error occurred",
+            contractId: contractId
+        });
+    }
+};
+
+// Add this function to get re-analysis results history
+export const getReAnalysisResults = async (req: Request, res: Response): Promise<Response> => {
+    const user = req.user as IUser;
+    const { contractId } = req.params;
+
+    if (!hasPremiumAccess(user)) {
+        return res.status(403).json({
+            error: "Premium subscription required",
+            message: "Re-analysis history is only available for Premium and Gold subscribers"
+        });
+    }
+
+    if (!isvalidMongoId(contractId)) {
+        return res.status(400).json({ error: "Invalid contract ID" });
+    }
+
+    try {
+        const contract = await ContractAnalysisSchema.findOne({
+            _id: contractId,
+            userId: user._id,
+        });
+
+        if (!contract) {
+            return res.status(404).json({ error: "Contract not found" });
+        }
+
+        // Extract re-analysis results from custom fields
+        const reAnalysisResults: any[] = [];
+        
+        if (contract.customFields) {
+            Object.entries(contract.customFields).forEach(([key, value]) => {
+                if (key.startsWith('reanalysis_')) {
+                    try {
+                        const parsedResult = JSON.parse(value as string);
+                        reAnalysisResults.push(parsedResult);
+                    } catch (parseError) {
+                        console.error("Error parsing re-analysis result:", parseError);
+                    }
+                }
+            });
+        }
+
+        // Sort by analysis date
+        reAnalysisResults.sort((a, b) => new Date(b.analysisDate).getTime() - new Date(a.analysisDate).getTime());
+
+        return res.status(200).json({
+            contractId: contractId,
+            results: reAnalysisResults,
+            totalResults: reAnalysisResults.length
+        });
+
+    } catch (error) {
+        console.error("Error getting re-analysis results:", error);
+        return res.status(500).json({ 
+            error: "Failed to get re-analysis results",
+            message: error instanceof Error ? error.message : "Unknown error"
+        });
+    }
+};
 
