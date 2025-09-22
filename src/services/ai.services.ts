@@ -183,12 +183,14 @@ export const modifyContractAI = async (
     }
 };
 
+// Enhanced extractTextFromPDF function with better formatting
 export const extractTextFromPDF = async (filekey: string): Promise<string> => {
     try {
         const fileData = await redis.get(filekey);
         if (!fileData) {
             throw new Error("File not found");
-        } 
+        }
+
         let fileBuffer: Uint8Array;
         if (Buffer.isBuffer(fileData)) {
             fileBuffer = new Uint8Array(fileData);
@@ -202,21 +204,56 @@ export const extractTextFromPDF = async (filekey: string): Promise<string> => {
         } else {
             throw new Error("Invalid file data");
         }
+
         const pdf = await getDocument({ data: fileBuffer }).promise;
         let text = "";
+
         for (let i = 1; i <= pdf.numPages; i++) {
             const page = await pdf.getPage(i);
             const content = await page.getTextContent();
-            text += content.items.map((item: any) => item.str).join(" ") + "\n";
+
+            // Build page text with better spacing
+            const pageText = content.items
+                .map((item: any) => (item.str && typeof item.str === "string" ? cleanJsonResponse(item.str) : ""))
+                .filter((str) => str.length > 0)
+                .join(" ");
+
+            if (pageText.trim()) {
+                text += pageText + "\n\n"; // double new line to separate paragraphs
+            }
         }
-        return text;
+
+        // Apply strong cleaning & formatting
+        const cleanedText = cleanContractFormatting(text)
+            .replace(/\s+/g, " ") // collapse multiple spaces
+            .replace(/\n{3,}/g, "\n\n") // limit excessive new lines
+            .replace(/([a-z0-9])\s*([.,;:!?])\s*/gi, "$1$2 ") // fix punctuation spacing
+            .replace(/\s*-\s*/g, "\n- ") // format bullet points
+            .replace(/(\d+)\.\s*/g, "\n$1. ") // format numbered lists
+            .replace(/([.!?])\s+/g, "$1\n") // sentence ends → new line
+            .replace(/[^\S\r\n]+/g, " ") // clean weird whitespace
+            .trim();
+
+        if (!cleanedText || cleanedText.length === 0) {
+            throw new Error("No readable text found in PDF");
+        }
+
+        return cleanedText;
     } catch (error: any) {
         console.error("PDF extraction error:", error);
-        throw new Error(
-            `Failed to extract text from PDF. Error: ${JSON.stringify(error)}`
-        );
+
+        if (error.message?.includes("Invalid PDF")) {
+            throw new Error("The uploaded file appears to be corrupted or not a valid PDF");
+        } else if (error.message?.includes("Password")) {
+            throw new Error("The PDF is password protected and cannot be processed");
+        } else if (error.message?.includes("No readable text")) {
+            throw new Error("The PDF appears to be image-based or contains no extractable text");
+        } else {
+            throw new Error(`Failed to extract text from PDF: ${error.message || "Unknown error"}`);
+        }
     }
 };
+
 
 export const detectContractType = async (
     contractText: string
@@ -585,10 +622,11 @@ export const chatWithContractAI = async (
 };
 
 
+// Enhanced generateCustomRecommendations function
 export const generateCustomRecommendations = async (
     contractText: string,
     contractType: string,
-    userFocus: string[] // Areas user wants to focus on (e.g., ["risk mitigation", "cost reduction", "legal compliance"])
+    userFocus: string[]
 ): Promise<string[]> => {
     try {
         if (!aiModel) {
@@ -609,26 +647,53 @@ export const generateCustomRecommendations = async (
         - Explain the potential impact
         - Consider the focus areas specified
 
-        Return the recommendations as a JSON array of strings:
-        ["Recommendation 1", "Recommendation 2", ...]`;
+        IMPORTANT: Return ONLY a clean JSON array of strings with no markdown formatting, no asterisks, no special symbols, and no code blocks. Format exactly like this:
+        ["Recommendation 1 text here", "Recommendation 2 text here", "Recommendation 3 text here"]
+
+        Do not include any markdown, asterisks (*), underscores (_), hash symbols (#), or any other formatting. Return only plain text within the JSON array.`;
 
         const results = await aiModel.generateContent(prompt);
         const response = results.response;
         let rawResponseText = response.text();
         
-        // Clean the response
+        // Enhanced cleaning for recommendations
         let cleanedResponse = cleanJsonResponse(rawResponseText);
         
         try {
             const recommendations = JSON.parse(cleanedResponse);
-            return Array.isArray(recommendations) ? recommendations : [];
+            if (Array.isArray(recommendations)) {
+                // Clean each recommendation text
+                const cleanedRecommendations = recommendations.map(rec => 
+                    typeof rec === 'string' ? cleanJsonResponse(rec) : String(rec)
+                );
+                return cleanedRecommendations;
+            }
+            return [];
         } catch (jsonError) {
             console.error("Failed to parse recommendations JSON:", jsonError);
-            // Fallback: try to extract recommendations from text
-            const lines = rawResponseText.split('\n').filter(line => 
-                line.trim().startsWith('"') || line.includes('Recommendation')
-            );
-            return lines.slice(0, 15); // Return up to 15 recommendations
+            console.log("Raw response:", rawResponseText.substring(0, 500));
+            console.log("Cleaned response:", cleanedResponse.substring(0, 500));
+            
+            // Enhanced fallback: extract recommendations from text
+            const lines = rawResponseText
+                .split('\n')
+                .map(line => cleanJsonResponse(line)) // Clean each line
+                .filter(line => {
+                    const trimmed = line.trim();
+                    return trimmed.length > 20 && // Minimum length for a meaningful recommendation
+                           (trimmed.startsWith('"') || 
+                            trimmed.includes('recommend') ||
+                            trimmed.includes('should') ||
+                            trimmed.includes('consider') ||
+                            /^\d+\./.test(trimmed)); // Numbered items
+                })
+                .map(line => {
+                    // Remove quotes and numbering
+                    return line.replace(/^["']*/, '').replace(/["']*$/, '').replace(/^\d+\.\s*/, '');
+                })
+                .slice(0, 15); // Return up to 15 recommendations
+
+            return lines.length > 0 ? lines : ["Unable to generate recommendations. Please try again."];
         }
     } catch (error: unknown) {
         console.error("Custom recommendations AI error:", error);
