@@ -25,7 +25,8 @@ import {
     deleteContractDate,
     getUpcomingContractDates,
     getAlertStatistics,
-    viewContract
+    viewContract,
+    deleteContractVersion
 } from "../controllers/contract.controller";
 import { handleErrors } from "../middleware/errors";
 
@@ -62,5 +63,7 @@ router.post("/recommendations", isAuthenticated, isGoldUser, handleErrors(genera
 router.get("/track-changes", isAuthenticated, isGoldUser, handleErrors(trackChanges));
 router.get("/compare-versions", isAuthenticated, isGoldUser, handleErrors(trackChanges)); // ALIAS FOR TRACK CHANGES
 router.get("/view/:contractId/version/:version", isAuthenticated, isGoldUser, handleErrors(viewContract));
+// Delete a specific modified version (Gold)
+router.delete('/:contractId/version/:version', isAuthenticated, isGoldUser, handleErrors(deleteContractVersion));
 
 export default router;

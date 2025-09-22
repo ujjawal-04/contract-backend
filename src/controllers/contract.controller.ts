@@ -1753,3 +1753,69 @@ export const getReAnalysisResults = async (req: Request, res: Response): Promise
     }
 };
 
+export const deleteContractVersion = async (req: Request, res: Response): Promise<Response> => {
+    const user = req.user as IUser;
+    const { contractId, version } = req.params;
+
+    if (!isvalidMongoId(contractId)) {
+        return res.status(400).json({ error: "Invalid contract ID" });
+    }
+
+    if (!version) {
+        return res.status(400).json({ error: "Version is required" });
+    }
+
+    // Disallow deleting the original version
+    if (version === "original" || version === "1") {
+        return res.status(400).json({ error: "Cannot delete the original version" });
+    }
+
+    try {
+        const contract = await ContractAnalysisSchema.findOne({ _id: contractId, userId: user._id });
+        if (!contract) {
+            return res.status(404).json({ error: "Contract not found" });
+        }
+
+        const vNum = parseInt(version as string, 10);
+        if (isNaN(vNum)) {
+            return res.status(400).json({ error: "Invalid version number" });
+        }
+
+        if (!contract.modificationHistory || contract.modificationHistory.length === 0) {
+            return res.status(404).json({ error: "No modification history for this contract" });
+        }
+
+        const idx = contract.modificationHistory.findIndex((m: any) => m.version === vNum);
+        if (idx === -1) {
+            return res.status(404).json({ error: "Version not found" });
+        }
+
+        // Remove the specified version
+        contract.modificationHistory.splice(idx, 1);
+
+        // Update metadata
+        contract.totalModifications = Math.max(0, (contract.totalModifications || 0) - 1);
+        contract.lastModified = new Date();
+
+        // Re-sequence remaining versions so they remain consecutive (start at 2)
+        if (contract.modificationHistory && contract.modificationHistory.length > 0) {
+            contract.modificationHistory.sort((a: any, b: any) => a.version - b.version);
+            contract.modificationHistory = contract.modificationHistory.map((m: any, i: number) => ({
+                ...m,
+                version: i + 2
+            }));
+        }
+
+        const saved = await contract.save();
+
+        return res.json({
+            success: true,
+            message: `Version ${vNum} deleted successfully`,
+            modificationHistory: saved.modificationHistory || []
+        });
+    } catch (error) {
+        console.error("Error deleting contract version:", error);
+        return res.status(500).json({ error: "Failed to delete contract version" });
+    }
+};
+
