@@ -461,29 +461,58 @@ export const modifyContract = async (req: Request, res: Response): Promise<Respo
         
         const newVersion = (contract.modificationHistory.length || 0) + 2; // Version 1 is original
         
-        contract.modificationHistory.push({
+        const modificationEntry = {
             modifiedAt: new Date(),
             modifiedBy: user.displayName || user.email,
             changes: finalModifications.join("; "),
             version: newVersion,
             modifiedContent: modifiedContract
-        });
+        };
         
-        await contract.save();
+        contract.modificationHistory.push(modificationEntry);
         
-        return res.json({
+        // CRITICAL: Save the contract first
+        const savedContract = await contract.save();
+        
+        console.log(`✅ Contract ${contractId} modified successfully. New version: ${newVersion}`);
+        console.log(`📝 Modification history length: ${savedContract.modificationHistory?.length}`);
+        
+        // CRITICAL: Clear any Redis cache for this contract
+        try {
+            const cacheKey = `contract:${contractId}`;
+            await redis.del(cacheKey);
+            console.log(`🗑️ Cleared cache for contract ${contractId}`);
+        } catch (cacheError) {
+            console.warn("Failed to clear cache:", cacheError);
+            // Don't fail the request if cache clearing fails
+        }
+        
+        // Return comprehensive response with updated contract data
+        const response = {
             modifiedContract: modifiedContract,
             originalContractId: contractId,
             modifications: finalModifications,
             version: newVersion,
-            canDownload: true
+            canDownload: true,
+            // CRITICAL: Include updated modification history in response
+            modificationHistory: savedContract.modificationHistory,
+            totalVersions: (savedContract.modificationHistory?.length || 0) + 1, // +1 for original
+            lastModified: new Date(),
+            success: true
+        };
+        
+        console.log(`📤 Returning modification response for contract ${contractId}:`, {
+            version: response.version,
+            totalVersions: response.totalVersions,
+            historyLength: response.modificationHistory?.length
         });
+        
+        return res.json(response);
     } catch (error) {
         console.error("Error in contract modification:", error);
         return res.status(500).json({ error: "Failed to modify contract" });
     }
 };
-
 // New Gold endpoint: Download modified contract as PDF
 export const downloadModifiedContract = async (req: Request, res: Response): Promise<Response | void> => {
     const user = req.user as IUser;
@@ -920,26 +949,8 @@ export const getContractByID = async (req: Request, res: Response): Promise<Resp
     }
 
     try {
-        // Try to get from Redis cache first
-        const cacheKey = `contract:${id}`;
-        const cachedContract = await redis.get(cacheKey);
-        
-        if (cachedContract) {
-            console.log("Cache hit for contract:", id);
-            // Parse the cached data if it's a string
-            const parsedContract = typeof cachedContract === 'string' 
-                ? JSON.parse(cachedContract) 
-                : cachedContract;
-                
-            return res.json({
-                ...parsedContract,
-                userPlan: getUserPlanLevel(user),
-                hasGoldAccess: hasGoldAccess(user)
-            });
-        }
-
-        // Not found in cache, get from database
-        console.log("Fetching contract from database:", id);
+        // CRITICAL: Always fetch from database first, don't rely on cache for contract details
+        console.log("🔍 Fetching contract from database:", id);
         const contract = await ContractAnalysisSchema.findOne({
             _id: id,
             userId: user._id,
@@ -952,21 +963,33 @@ export const getContractByID = async (req: Request, res: Response): Promise<Resp
         // Convert mongoose document to plain object
         const contractObject = contract.toObject();
         
-        // Store in Redis as a JSON string
+        console.log(`📄 Contract ${id} fetched:`, {
+            modificationHistoryLength: contractObject.modificationHistory?.length || 0,
+            totalVersions: (contractObject.modificationHistory?.length || 0) + 1,
+            lastModified: contractObject.lastModified
+        });
+        
+        // CRITICAL: Always store fresh data in cache
+        const cacheKey = `contract:${id}`;
         try {
-            await redis.set(cacheKey, JSON.stringify(contractObject), { ex: 3600 });
-            console.log("Contract cached successfully:", id);
+            await redis.set(cacheKey, JSON.stringify(contractObject), { ex: 1800 }); // 30 minutes
+            console.log(`💾 Contract ${id} cached successfully`);
         } catch (redisError) {
             console.error("Redis caching error:", redisError);
             // Continue even if caching fails
         }
 
         // Return the contract with user plan info
-        return res.json({
+        const response = {
             ...contractObject,
             userPlan: getUserPlanLevel(user),
-            hasGoldAccess: hasGoldAccess(user)
-        });
+            hasGoldAccess: hasGoldAccess(user),
+            // CRITICAL: Ensure modification history is properly included
+            totalVersions: (contractObject.modificationHistory?.length || 0) + 1,
+            hasModifications: (contractObject.modificationHistory?.length || 0) > 0
+        };
+        
+        return res.json(response);
     } catch (error) {
         console.error("Error in getContractByID:", error);
         return res.status(500).json({ error: "Failed to get contract" });
