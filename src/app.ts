@@ -26,15 +26,10 @@ const isProduction = process.env.NODE_ENV === "production";
 console.log("Environment:", process.env.NODE_ENV);
 console.log("Client URL:", process.env.CLIENT_URL);
 
-// Connect to MongoDB
-mongoose.connect(process.env.MONGODB_URI!)
-  .then(() => console.log("✅ Connected to MongoDB"))
-  .catch((err) => console.error("❌ MongoDB Error:", err));
-
 // IMPORTANT: Trust proxy - this is critical for Railway/Vercel
 app.set('trust proxy', 1);
 
-
+// Connect to MongoDB
 mongoose.connect(process.env.MONGODB_URI!)
   .then(() => {
     console.log("✅ Connected to MongoDB");

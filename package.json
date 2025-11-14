@@ -2,10 +2,10 @@
   "name": "server",
   "version": "1.0.0",
   "description": "",
-  "main": "index.js",
-  "scripts": {
+  "main": "index.js",  "scripts": {
     "dev": "nodemon --watch 'src/**/*' --exec ts-node src/app.ts",
-    "start": "ts-node src/app.ts"
+    "build": "tsc",
+    "start": "node dist/app.js"
   },
   "keywords": [],
   "author": "",
@@ -24,10 +24,9 @@
     "express": "^5.1.0",
     "express-session": "^1.18.1",
     "helmet": "^8.1.0",
-    "html-pdf-node": "^1.0.8",
-    "mercadopago": "^2.9.0",
+    "html-pdf-node": "^1.0.8",    "mercadopago": "^2.9.0",
     "mongodb": "^6.16.0",
-    "moongoose": "^0.0.5",
+    "mongoose": "^8.9.3",
     "morgan": "^1.10.0",
     "multer": "^1.4.5-lts.2",
     "node-cron": "^4.2.1",
@@ -39,23 +38,22 @@
     "pdfkit": "^0.17.1",
     "redis": "^4.7.0",
     "resend": "^4.2.0",
-    "stripe": "^18.0.0"
-  },
-  "devDependencies": {
+    "stripe": "^18.0.0",
+    "ts-node": "^10.9.2"
+  },  "devDependencies": {
     "@types/cors": "^2.8.17",
     "@types/express": "^5.0.1",
     "@types/express-session": "^1.18.1",
     "@types/html-pdf-node": "^1.0.2",
     "@types/mercadopago": "^1.5.11",
-    "@types/mongoose": "^5.11.97",
     "@types/morgan": "^1.9.9",
     "@types/multer": "^1.4.12",
     "@types/node": "^22.14.1",
     "@types/passport": "^1.0.17",
     "@types/passport-google-oauth20": "^2.0.16",
+    "@types/passport-local": "^1.0.38",
     "@types/pdfkit": "^0.13.0",
     "nodemon": "^3.1.9",
-    "ts-node": "^10.9.2",
     "typescript": "^5.8.3"
   }
 }
